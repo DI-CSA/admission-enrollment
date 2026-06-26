@@ -1,0 +1,45 @@
+@import "tailwindcss";
+
+/* Design system CSA Leblon — direção visual MODERNA e ARROJADA, derivada da
+   campanha oficial do parceiro de marketing: azul profundo + malha de constelação,
+   amarelo/dourado vibrante (gradiente do brasão) e tipografia bold em caixa-alta.
+   (Confirmar HEX finais no manual da marca.) */
+@theme {
+  --color-csa-navy: #07294d;
+  --color-csa-azul: #0b4d8f;
+  --color-csa-azul-claro: #1f7fc4;
+  --color-csa-ciano: #2bb3e6;
+  --color-csa-amarelo: #ffe000;
+  --color-csa-dourado: #f3af00;
+  --color-csa-dourado-escuro: #d99700;
+  --color-csa-vermelho: #c8102e;
+  --color-areia: #f4f7fb;
+  --color-grafite: #14202e;
+  --color-cinza-suave: #5b6b7d;
+
+  --font-sans: var(--font-inter);
+  --font-display: var(--font-outfit);
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background: #ffffff;
+  color: var(--color-grafite);
+  font-family: var(--font-sans), system-ui, sans-serif;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-display), system-ui, sans-serif;
+  letter-spacing: -0.01em;
+}
+
+/* Malha de constelação reutilizável (fundo de seções escuras) */
+.mesh {
+  background-image: radial-gradient(rgba(255, 255, 255, 0.14) 1px, transparent 1px);
+  background-size: 24px 24px;
+}

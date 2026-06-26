@@ -1,0 +1,22 @@
+# Dependências e artefatos de build
+node_modules/
+.next/
+out/
+dist/
+*.tsbuildinfo
+
+# Variáveis de ambiente / segredos
+.env
+.env.local
+.env.*.local
+
+# Sistema operacional / editor
+.DS_Store
+*.log
+
+# Cópia de referência do TOTVS (proprietária e volumosa — somente local)
+FrameHTML/
+TOTVS/
+
+# Mídia volumosa de referência (vídeo bruto do parceiro) — manter só assets usados
+media/*.mp4

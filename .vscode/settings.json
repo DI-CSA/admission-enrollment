@@ -1,0 +1,16 @@
+{
+  // Exclusoes apenas de performance: pastas grandes que ficam somente no disco
+  // local (nao versionadas) — a copia de referencia do TOTVS e artefatos de build.
+  "files.watcherExclude": {
+    "**/FrameHTML/**": true,
+    "**/TOTVS/**": true,
+    "**/node_modules/**": true,
+    "**/.next/**": true
+  },
+  "search.exclude": {
+    "**/FrameHTML/**": true,
+    "**/TOTVS/**": true,
+    "**/node_modules/**": true,
+    "**/.next/**": true
+  }
+}
