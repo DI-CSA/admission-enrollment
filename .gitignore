@@ -15,8 +15,10 @@ dist/
 *.log
 
 # Cópia de referência do TOTVS (proprietária e volumosa — somente local)
-FrameHTML/
-TOTVS/
+# Ancorado à raiz (/) para NÃO casar com plataforma/lib/totvs/ — em macOS o git
+# usa core.ignorecase=true e "TOTVS/" sem âncora bloquearia "lib/totvs/".
+/FrameHTML/
+/TOTVS/
 
 # Mídia volumosa de referência (vídeo bruto do parceiro) — manter só assets usados
 media/*.mp4
