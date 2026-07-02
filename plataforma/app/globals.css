@@ -43,3 +43,52 @@ h3 {
   background-image: radial-gradient(rgba(255, 255, 255, 0.14) 1px, transparent 1px);
   background-size: 24px 24px;
 }
+
+/* Conteúdo institucional vindo do CMS do CSA (HTML sanitizado), exibido no
+   modal da seção "Por que o CSA Leblon". */
+.csa-prose p {
+  margin: 0 0 0.85em;
+}
+
+.csa-prose p:last-child {
+  margin-bottom: 0;
+}
+
+.csa-prose strong,
+.csa-prose b {
+  font-weight: 600;
+  color: var(--color-grafite);
+}
+
+.csa-prose a {
+  color: var(--color-csa-azul);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.csa-prose a:hover {
+  color: var(--color-csa-azul-claro);
+}
+
+.csa-prose ul,
+.csa-prose ol {
+  margin: 0 0 0.85em;
+  padding-left: 1.25em;
+  list-style: disc;
+}
+
+.csa-prose ol {
+  list-style: decimal;
+}
+
+.csa-prose li {
+  margin: 0.25em 0;
+}
+
+.csa-prose h3,
+.csa-prose h4 {
+  font-family: var(--font-display), system-ui, sans-serif;
+  font-weight: 600;
+  color: var(--color-csa-azul);
+  margin: 0.5em 0 0.35em;
+}

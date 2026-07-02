@@ -7,6 +7,11 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: import.meta.dirname,
   },
+  // Inclui os PDFs de programas (acesso restrito, fora de public/) no bundle
+  // standalone, para a rota /api/programas/[codigo] conseguir lê-los na VM.
+  outputFileTracingIncludes: {
+    "/api/programas/[codigo]": ["./private/programas/**"],
+  },
 };
 
 export default nextConfig;

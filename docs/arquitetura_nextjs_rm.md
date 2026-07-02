@@ -198,8 +198,12 @@ Distribuição de verbos no portal original: ~77 GET, ~45 Query, ~21 POST, ~5 Up
 
 Os payloads usam **datasets do RM** (ex.: arrays `SPSUSUARIO[]` com campos como `CORRACAOBJ`,
 `ESTADOCIVILOBJ`, `IPCLIENT`). Reproduzir esse formato fielmente é o **grosso do esforço** da
-Opção B. Recomenda-se **capturar a rede** (DevTools/Fiddler) rodando o portal oficial para
-gravar request/response reais de cada etapa e usar como especificação do BFF.
+Opção B. Há **duas formas** de levantar esse schema:
+
+1. **Captura de rede** (DevTools/Fiddler) rodando o portal oficial — fiel ao que o EduPS espera.
+2. **Discovery via DataServers** (ver 2.5): os campos do dataset espelham as tabelas do RM, cujo
+   schema é obtido por REST sem navegador. Mais rápido para *modelar*; a validação final do
+   `NovaInscricao` ainda confirma o formato exato.
 
 ### 2.4. Pagamento simplificado — boleto via URL do RM
 
@@ -217,6 +221,32 @@ const url = r.URLBOLETOFIXO || r.URLREGONLINE;   // RM já gerou o boleto
   exige chamada explícita a `BoletoFixoTaxaInscricao`; e o tratamento de **PS isento de taxa**
   (não gera boleto → pula a etapa e vai ao comprovante).
 
+### 2.5. Segunda superfície — DataServers / REST T-Talk (leitura/referência)
+
+Além da WebAPI EduPS (no IIS `…/FrameHTML`), o **RM.Host** expõe os **DataServers** do RM via
+REST T-Talk, normalmente noutro host/porta (nos scripts existentes: `http://35.247.234.33:8051`).
+
+- **Autenticação:** JWT de serviço em `POST /api/connect/token` (credenciais de staff), **não**
+  o cookie do candidato. É um canal **administrativo** — manter server-side e com IP restrito.
+- **Acesso:** `RMSRestDataServer` — `GET /rest/{DataServer}?filter=&start=&limit=` (GetAll),
+  `GET /rest/{DataServer}/{id}` (Get), `GET /service/{DataServer}/schema` (schema).
+- **Uso na plataforma:** **somente LEITURA / dados de referência** — PS ativos, oferta de
+  cursos/áreas, planos de pagamento e *lookup* de pessoa por CPF (cadastro existente). Isso
+  **dispensa a captura no navegador** para os dados de catálogo e ajuda a modelar o dataset.
+- **Escrita continua na EduPS WebAPI** (`NovaInscricao`, boleto): gravar direto via
+  `EduCandidatoProcSelData` burlaria as regras do PS (reserva de vaga, geração de boleto).
+
+DataServers relevantes: `EduCandidatoProcSelData`, `EduControleCandMatrProcSelData`,
+`EduPessoaData`, `EduResponsavelData`, `EduFiadorData`, `EduPlanoPgtoData`, `EduBoletoData`,
+`EduCursoData`, `EduHabilitacaoFilialData`.
+
+Implementação: [plataforma/lib/rm/dataserver.ts](../plataforma/lib/rm/dataserver.ts) (client JWT +
+RMSRestDataServer) e o script [plataforma/scripts/rm-discovery.mjs](../plataforma/scripts/rm-discovery.mjs)
+(`pnpm rm:discovery`) que baixa schema + amostra dos DataServers alvo.
+
+> ⚠️ Credenciais e PII: o JWT é de staff (privilegiado) e as amostras podem conter dados
+> pessoais — `scripts/discovery-out/` é git-ignored; credenciais só em `.env.local`.
+
 ---
 
 ## 3. Arquitetura escolhida
@@ -228,9 +258,9 @@ mesma VPC da VM Windows (RM), com o IIS como porta de entrada única.**
 
 ```mermaid
 flowchart LR
-    B[Browser] -->|HTTPS, 1 origem<br/>inscricao.csa.com.br| IIS[IIS - entrada única<br/>VM Windows]
-    IIS -->|/FrameHTML/*| RM[RM WebAPI<br/>VM Windows / IIS]
-    IIS -->|/* (reverse proxy)| NX[Next.js - Node/systemd<br/>VM Linux GCE]
+    B[Browser] -->|"HTTPS, 1 origem<br/>inscricao.csa.com.br"| IIS[IIS - entrada única<br/>VM Windows]
+    IIS -->|"/FrameHTML/*"| RM[RM WebAPI<br/>VM Windows / IIS]
+    IIS -->|"/* (reverse proxy)"| NX[Next.js - Node/systemd<br/>VM Linux GCE]
     NX -. BFF server-to-server<br/>VPC privada .-> RM
 ```
 
@@ -287,6 +317,67 @@ Catálogo → Reconhecimento/Login → Cadastro → Inscrição → Boleto da ta
 4. **Inscrição (wizard):** `NovaInscricao`, `TermoAceitePS`, questionário, `Reserva`.
 5. **Boleto:** `InfoBoletoInscricao`/`BoletoFixoTaxaInscricao` → entrega `URLBOLETOFIXO` (+ 2ª via).
 6. **Comprovante:** `Inscricao/Comprovante`.
+
+#### 3.2.1. Reconhecimento e login por CPF do responsável (regra de negócio)
+
+O acesso é sempre pelo **CPF do responsável**. O nome e os demais dados só são pedidos
+depois — exceto quando o responsável já existe no TOTVS, caso em que os dados são lidos
+do sistema e exibidos **apenas para confirmação**.
+
+```
+[CPF do responsável]
+        │  reconhecerResponsavelPorCpf(cpf)  (leitura SQL — SPSUSUARIO)
+        ▼
+   ┌────────────┐  existe = true                ┌────────────┐  existe = false
+   │ RECONHECIDO│ ───────────────►              │   NOVO     │ ───────────────►
+   └────────────┘                               └────────────┘
+   • exibe nome + e-mail mascarado p/ confirmar  • segue cadastro normal: pede nome
+   • pede a SENHA → EduPS `LoginNovoPortal`        e demais dados conforme o PS
+     (tipoIdentificacao=0/CPF, senha base64)     • criação/inscrição via EduPS
+   • "Esqueci minha senha" → EduPS                 (`InsereInscricao`, etc.)
+     `RecuperarSenha` (opção da TOTVS)
+```
+
+- `temSenhaCadastrada` (flag de `reconhecerResponsavelPorCpf`) indica se o login usa
+  **senha própria** ou **data de nascimento** — em `SPSUSUARIO`, ~63% das contas têm senha
+  própria; as demais autenticam por data de nascimento (parametrização do RM, conforme a
+  doc de `LoginNovoPortal`: *"senha cadastrada ou data de nascimento"*).
+- O **reconhecimento** é leitura (SQL direto, rápido); **autenticação, redefinição de senha
+  e cadastro** continuam pela WebAPI EduPS (fonte autoritativa das regras do PS).
+- **Segurança:** a rota BFF de reconhecimento expõe a existência de cadastro a partir de um
+  CPF → exigir **rate-limit / proteção contra enumeração** e retornar **apenas dados
+  mascarados** (nunca e-mail/telefone completos antes do login).
+
+#### 3.2.2. Múltiplos candidatos por responsável (sem duplicar o mesmo candidato)
+
+Um responsável (CPF) pode inscrever **vários candidatos** no mesmo PS, mas **não o mesmo
+candidato duas vezes**. Confirmado no portal TOTVS (`js/inscricoes-irmaos/`,
+`js/centralcandidato/`):
+
+- O front mantém `$rootScope.inscricaoIrmaos.candidatos[]` (um objeto por candidato); o
+  **CPF do responsável** é o mesmo para todos, e cada candidato tem identidade própria.
+- "Adicionar candidato" / "Novo dependente" / "Nova inscrição para dependente existente"
+  (funções em `centralcandidato.service.js`) levam ao wizard com `novoDependente: true|false`
+  e, quando aplicável, `codUsuarioPSDependente`.
+- **Identidade do candidato** = conta do portal `CODUSUARIOPS` (ou, para um novo cadastro,
+  o **CPF do candidato** / passaporte / RG, conforme o grupo de busca configurado no PS).
+- **Onde a inscrição vive:** `SPSINSCRICAOAREAOFERTADA` (PK `CODCOLIGADA,IDPS,NUMEROINSCRICAO`;
+  colunas `CODUSUARIOPS`, `CODPESSOA`, `CODPESSOARESPONSAVEL`, `STATUS` — 1=ativa). É **1 linha
+  por área/opção**, então o banco **não** tem unique para `(candidato, PS)`.
+- **Bloqueio autoritativo:** a duplicidade é barrada pela **WebAPI EduPS no submit**
+  (`/Inscricao/v2/BuscaUsuario` retorna flag `Bloqueia`; mensagens `l-msg-cadastro-ja-existente*`).
+  Não há constraint de banco — **não** tente impedir por SQL direto.
+- **Pré-check de UX (nosso, leitura):** `candidatoJaInscritoNoProcesso(idps, codUsuarioPS)` e
+  `candidatoCpfJaInscritoNoProcesso(idps, cpf)` em `lib/totvs/queries.ts` consultam
+  `SPSINSCRICAOAREAOFERTADA` (STATUS=1) só para **avisar antes** — a decisão final é da EduPS.
+
+```
+Responsável (CPF) ── inscreve ──► [candidato A] [candidato B] [candidato C]  (mesmo PS) ✅
+                                        │
+                       candidatoJaInscritoNoProcesso(idps, codUsuarioPS) → avisa se repetir
+                                        │ (autoritativo)
+                       EduPS /Inscricao/v2/BuscaUsuario → Bloqueia mesmo candidato no mesmo PS
+```
 
 ---
 

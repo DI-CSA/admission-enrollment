@@ -23,18 +23,26 @@ export interface Processo {
 export const PORTAL_BASE =
   "https://portal.csa.com.br/FrameHTML/web/app/Edu/PortalProcessoSeletivo/";
 
+// Ano-base dos processos seletivos de admissão. A "chave" para listar as opções no
+// portal é o ano no NOME do PS (ex.: "...2027..."): há um PS por ano/série, do 1º Ano
+// do Fundamental à 2ª Série do Médio. Atualize ao virar o ciclo de admissão.
+export const ANO_PROCESSO = 2027;
+
 export const PROCESSOS: Record<ChaveProcesso, Processo> = {
   fundamental1: {
     chave: "fundamental1",
     rotulo: "1º Ano do Ensino Fundamental",
-    selo: "Anos Iniciais · Alfabetização",
+    selo: "Anos Iniciais",
     descricao:
       "A porta de entrada no Ensino Fundamental. Uma fase de descobertas — a leitura, " +
       "a escrita, os números, um novo idioma e o Carisma Agostiniano.",
-    edital: "/editais/edital-1ano-fundamental.pdf",
+    edital: "/editais/edital-2027-f1.pdf",
     codColigada: 1,
     codFilial: 1,
-    ps: 0, // TODO: preencher com o ps de 2027
+    // IDPS 210 — "CSA Leblon - Processo Seletivo 2027-1º Ano do Fundamental"
+    // (R$200; inscrições 01/07/2026→04/04/2027). Confirmado direto no CorporeRM.
+    // OBS: EXIBENOPORTAL='F' no RM — publicar o PS no portal antes de divulgar o link.
+    ps: 210,
   },
   demais: {
     chave: "demais",
@@ -43,10 +51,14 @@ export const PROCESSOS: Record<ChaveProcesso, Processo> = {
     descricao:
       "Para as demais séries com vagas disponíveis, dos Anos Iniciais ao Ensino Médio. " +
       "Formação acadêmica de excelência aliada a valores cristãos.",
-    edital: "/editais/edital-2ano-a-2serie.pdf",
+    edital: "/editais/edital-2027-F2-M2.pdf",
     codColigada: 1,
     codFilial: 1,
-    ps: 0, // TODO: preencher com o ps de 2027
+    // IDPS 212 — "F2-M2-2027" (2º Ano do Fundamental → 2ª Série do Ensino Médio;
+    // "demais séries"). STATUS='T'/EXIBENOPORTAL='T', R$200. Confirmado no
+    // CorporeRM (homolog). OBS: os IDs de PS mudam por ambiente — confirmar o
+    // IDPS de produção antes de divulgar o link.
+    ps: 212,
   },
 };
 

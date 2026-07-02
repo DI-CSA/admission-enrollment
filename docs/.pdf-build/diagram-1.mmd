@@ -1,0 +1,8 @@
+flowchart LR
+    A[CPF informado] -->|inscricao-iniciada → Lead| B[Reconhecido / Cadastro]
+    B -->|cadastro-responsavel → Lead Qualificado| C[Escolha de série/área]
+    C -->|area-escolhida| D[Boleto gerado]
+    D -->|boleto-gerado → Checkout Iniciado / Oportunidade| E[Pagamento]
+    E -->|pagamento-confirmado → Pedido Pago / Cliente| F[Inscrito]
+    C -.->|abandono| G[Carrinho Abandonado]
+    D -.->|não pagou| G

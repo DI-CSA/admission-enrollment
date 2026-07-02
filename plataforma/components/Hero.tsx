@@ -1,11 +1,10 @@
+import { ConstellationBackground } from "./ConstellationBackground";
+
 export function Hero() {
   return (
     <section className="relative overflow-hidden bg-csa-navy text-white">
-      {/* malha de constelação + brilhos de cor (constroem o clima da campanha) */}
-      <div
-        className="mesh pointer-events-none absolute inset-0 opacity-60"
-        aria-hidden
-      />
+      {/* rede luminosa (constelação) — clima da arte da campanha */}
+      <ConstellationBackground className="pointer-events-none absolute inset-0 opacity-70" />
       <div
         className="pointer-events-none absolute inset-0"
         style={{
@@ -66,9 +65,11 @@ export function Hero() {
           />
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            src="/brand/brasao-csa.svg"
-            alt="Brasão oficial do Colégio Santo Agostinho"
-            className="relative w-44 drop-shadow-2xl lg:w-56"
+            src="/brand/campanha.webp"
+            alt="Campanha de admissão 2027 do Colégio Santo Agostinho — o hub de desenvolvimento educacional, desde sempre"
+            width={795}
+            height={1600}
+            className="relative w-64 rounded-2xl shadow-2xl ring-1 ring-white/15 lg:w-80"
           />
         </div>
       </div>

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Inter, Outfit } from "next/font/google";
+import Script from "next/script";
 import "./globals.css";
 
 const inter = Inter({
@@ -27,12 +28,27 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // Código de rastreamento do RD Station (grava o cookie __trf.src e classifica a
+  // origem do visitante, incluindo Social). O UUID é específico da conta; sem ele
+  // o script não é carregado. Obtenha em: RD Station Marketing → Configurações →
+  // Conta → Script do RD Station (loader-scripts/<UUID>-loader.js).
+  const rdTrackingUuid = process.env.NEXT_PUBLIC_RD_TRACKING_UUID;
   return (
     <html
       lang="pt-BR"
       className={`${inter.variable} ${outfit.variable} h-full antialiased`}
+      suppressHydrationWarning
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col">
+        {children}
+        {rdTrackingUuid ? (
+          <Script
+            id="rd-station-tracking"
+            src={`https://d335luupugsy2.cloudfront.net/js/loader-scripts/${rdTrackingUuid}-loader.js`}
+            strategy="afterInteractive"
+          />
+        ) : null}
+      </body>
     </html>
   );
 }

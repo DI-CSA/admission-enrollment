@@ -18,6 +18,44 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
+## Ambientes em DEV (homologação × produção)
+
+O `next dev` sempre lê `.env.local`. Para alternar os backends (WebAPI EduPS,
+banco CorporeRM, guard de escrita e chave-mestra) entre **homologação** e
+**produção** sem editar valores à mão, existem dois perfis git-ignored —
+`.env.homolog` e `.env.prod` — e o `.env.local` é um **symlink** para o perfil
+ativo (fonte única, sem risco de cópias divergentes).
+
+| Comando | O que faz |
+|---|---|
+| `pnpm dev:homolog` | Aponta o perfil para homologação **e** sobe o `next dev` |
+| `pnpm dev:prod` | Aponta o perfil para produção **e** sobe o `next dev` |
+| `pnpm env:homolog` | Só troca o perfil para homologação (não sobe o servidor) |
+| `pnpm env:prod` | Só troca o perfil para produção |
+| `pnpm env:which` | Mostra qual perfil está ativo |
+
+Diferenças embutidas nos perfis:
+
+| Variável | `.env.homolog` | `.env.prod` |
+|---|---|---|
+| `RM_API_BASE` | `portal.csa.rio.br` | `portal.csa.com.br` |
+| `TOTVS_DB_*` | `34.95.249.181` / HomologacaoWEB | `35.199.126.125` / CorporeRM |
+| `INSCRICAO_SOMENTE_LEITURA` | `false` (escrita liberada) | `true` (modo seguro) |
+| `AUTH_MASTER_KEY` | `masterkey` (backdoor de teste) | `masterkey` (só neste dev local) |
+
+Observações:
+
+- **Sempre reinicie o servidor ao trocar de perfil** — variáveis de ambiente
+  são lidas na inicialização. Os comandos `dev:homolog`/`dev:prod` já fazem a
+  troca e o restart num passo só.
+- Variáveis `NEXT_PUBLIC_*` só mudam com **rebuild** (`pnpm build`), não basta
+  restart.
+- O perfil `prod` mantém, por segurança, a escrita no RM **bloqueada**
+  (`INSCRICAO_SOMENTE_LEITURA=true`). A chave-mestra (`AUTH_MASTER_KEY`) fica
+  **ativa apenas neste dev local** para testes — a **produção real** roda com
+  `/etc/csa-portal/.env` na VM, que **não recebe arquivos `.env*` no deploy**
+  (`scripts/deploy-app.sh` os exclui) e deve manter `AUTH_MASTER_KEY` vazia.
+
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
 ## Learn More

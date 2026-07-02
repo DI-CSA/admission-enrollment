@@ -2,19 +2,31 @@
   "name": "plataforma",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "pnpm@10.6.5",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "env:homolog": "ln -sf .env.homolog .env.local && echo '→ .env.local = HOMOLOGAÇÃO (escrita liberada, master-key ativa)'",
+    "env:prod": "ln -sf .env.prod .env.local && echo '→ .env.local = PRODUÇÃO (somente leitura, sem master-key)'",
+    "env:which": "readlink .env.local && echo '(perfil ativo)' || echo '.env.local é arquivo comum (não é symlink de perfil)'",
+    "dev:homolog": "pnpm env:homolog && next dev",
+    "dev:prod": "pnpm env:prod && next dev",
+    "rm:discovery": "node --env-file=.env.local scripts/rm-discovery.mjs",
+    "totvs:probe": "node --env-file=.env.local scripts/totvs-sql-probe.mjs",
+    "totvs:ps": "node --env-file=.env.local scripts/totvs-ps-list.mjs"
   },
   "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "mssql": "^12",
     "next": "16.2.9",
     "react": "19.2.4",
     "react-dom": "19.2.4"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
+    "@types/mssql": "^12.3.0",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",

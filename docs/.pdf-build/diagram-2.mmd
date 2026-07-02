@@ -1,0 +1,8 @@
+flowchart LR
+    subgraph MKT[RD Station Marketing — núcleo hoje]
+        L[Captação de leads] --> N[Nutrição / automações] --> O[Funil de contato]
+    end
+    subgraph CRM[RD Station CRM — fase futura]
+        P[Pipeline de admissão] --> Q[Deals / origens / motivos de perda]
+    end
+    O -.->|oportunidade vira negociação| P

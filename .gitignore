@@ -20,3 +20,9 @@ TOTVS/
 
 # Mídia volumosa de referência (vídeo bruto do parceiro) — manter só assets usados
 media/*.mp4
+# Fontes de design volumosas (PSD/INDD/EPS/IDML/SVG grande) — não versionar no app
+media/*.psd
+media/*.indd
+media/*.idml
+media/*.eps
+media/campanha.svg
