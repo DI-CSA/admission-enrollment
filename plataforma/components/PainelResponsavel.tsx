@@ -541,7 +541,7 @@ export function PainelResponsavel({
                   type="button"
                   onClick={() => d.numeroInscricao && selecionar(d)}
                   disabled={!d.numeroInscricao}
-                  className="flex w-full flex-col gap-2 px-4 py-3 text-left transition hover:bg-areia/60 disabled:cursor-default"
+                  className="group flex w-full flex-col gap-2 px-4 py-3 text-left transition hover:bg-areia/60 disabled:cursor-default"
                 >
                   <div className="flex w-full items-center justify-between gap-3">
                     <div>
@@ -577,8 +577,21 @@ export function PainelResponsavel({
                             </span>
                           </span>
                         )}
-                        <span className="text-xs font-medium text-csa-azul">
+                        <span className="inline-flex items-center gap-1 rounded-full bg-csa-azul/10 px-3 py-1 text-xs font-semibold text-csa-azul transition group-hover:bg-csa-azul group-hover:text-white">
                           Ver detalhes
+                          <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            viewBox="0 0 20 20"
+                            fill="currentColor"
+                            className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5"
+                            aria-hidden="true"
+                          >
+                            <path
+                              fillRule="evenodd"
+                              d="M7.21 14.77a.75.75 0 0 1 .02-1.06L11.168 10 7.23 6.29a.75.75 0 1 1 1.04-1.08l4.5 4.25a.75.75 0 0 1 0 1.08l-4.5 4.25a.75.75 0 0 1-1.06-.02Z"
+                              clipRule="evenodd"
+                            />
+                          </svg>
                         </span>
                       </div>
                     )}
