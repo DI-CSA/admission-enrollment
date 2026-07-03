@@ -31,6 +31,12 @@ export interface NegociacaoInscricao {
   nomeCandidato?: string | null;
   /** Segmento/série de interesse. */
   segmento?: string | null;
+  /**
+   * Nome do processo seletivo (curso/ano-série pretendido). Cada ano/série
+   * corresponde a um PS distinto, então o nome do PS já identifica o curso.
+   * Vira custom field (`RD_CRM_CF_PROCESSO_ID`) para filtrar as negociações.
+   */
+  processoSeletivo?: string | null;
   /** Valor da taxa de inscrição (vira o valor da negociação). */
   valor?: number | string | null;
   idps?: number | null;
@@ -46,6 +52,13 @@ export interface NegociacaoInscricao {
   respFinanceiroNome?: string | null;
   respFinanceiroEmail?: string | null;
   respFinanceiroTelefone?: string | null;
+  /**
+   * IDLAN do lançamento financeiro da taxa no RM. Gravado como custom field
+   * (`RD_CRM_CF_IDLAN_ID`) para servir de CHAVE de reconciliação: com ele,
+   * localizar a negociação e atualizar o pagamento (quando a taxa for baixada
+   * no FLAN) torna-se trivial, sem depender de busca por nome.
+   */
+  idLan?: number | string | null;
 }
 
 function numero(v: unknown): number | undefined {
@@ -107,6 +120,29 @@ export async function registrarNegociacaoInscricao(
     dealCustomFields.push({
       custom_field_id: cfNomeRespFinId,
       value: neg.respFinanceiroNome,
+    });
+  }
+  // Curso pretendido (nome do PS) + série: chaves de segmentação/filtro no CRM.
+  const cfProcessoId = process.env.RD_CRM_CF_PROCESSO_ID;
+  const cfSerieId = process.env.RD_CRM_CF_SERIE_ID;
+  if (cfProcessoId && neg.processoSeletivo) {
+    dealCustomFields.push({
+      custom_field_id: cfProcessoId,
+      value: neg.processoSeletivo,
+    });
+  }
+  if (cfSerieId && neg.segmento) {
+    dealCustomFields.push({
+      custom_field_id: cfSerieId,
+      value: neg.segmento,
+    });
+  }
+  // Chave de reconciliação do pagamento: IDLAN do lançamento da taxa no RM.
+  const cfIdLanId = process.env.RD_CRM_CF_IDLAN_ID;
+  if (cfIdLanId && neg.idLan != null && neg.idLan !== "") {
+    dealCustomFields.push({
+      custom_field_id: cfIdLanId,
+      value: String(neg.idLan),
     });
   }
 

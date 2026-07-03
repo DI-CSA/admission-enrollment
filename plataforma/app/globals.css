@@ -19,6 +19,33 @@
 
   --font-sans: var(--font-inter);
   --font-display: var(--font-outfit);
+
+  /* Sino de "pontos de atenção" no painel do responsável: balança de leve,
+     ancorado no topo. Usado com animate-sino + origin-top (motion-safe). */
+  --animate-sino: sino 1.4s ease-in-out infinite;
+}
+
+@keyframes sino {
+
+  0%,
+  55%,
+  100% {
+    transform: rotate(0deg);
+  }
+
+  10%,
+  30% {
+    transform: rotate(14deg);
+  }
+
+  20%,
+  40% {
+    transform: rotate(-14deg);
+  }
+
+  50% {
+    transform: rotate(6deg);
+  }
 }
 
 html {

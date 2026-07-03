@@ -84,8 +84,8 @@ export async function registrarEventoFunil(ev: EventoFunil): Promise<void> {
     : `inscricao-${ANO_PROCESSO}-${ev.etapa}`;
 
   // Fonte da conversão: preserva a atribuição real (cookie de rastreamento ou
-  // UTM) e, quando ela não existe, rotula como "Sistema de Inscrições" para não
-  // cair em "unknown" no RD.
+  // UTM) e, quando ela não existe, usa a fonte padrão (SOURCE_PADRAO /
+  // RD_SOURCE_PADRAO) para não cair em "unknown" no RD.
   const trafficSource =
     ev.trafficSource ?? (ev.clientTrackingId ? undefined : SOURCE_PADRAO);
 

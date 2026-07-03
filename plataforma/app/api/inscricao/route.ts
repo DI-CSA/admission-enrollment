@@ -12,6 +12,7 @@ import {
   criarInscricao,
   existeUsuario,
   montarModeloNovaInscricao,
+  obterIdLanInscricao,
   type DadosCandidato,
   type DadosComplementares,
   type DocumentoInscricao,
@@ -774,6 +775,22 @@ export async function POST(req: NextRequest) {
       respFinanceiroModelo?.telefone1 ??
       respFinanceiroModelo?.telefone2 ??
       null;
+    // IDLAN da taxa (chave de reconciliação de pagamento no CRM). Lido por SQL
+    // logo após a inscrição, independentemente de cookie (serve fluxo logado e
+    // cadastro novo). Não-crítico: se falhar/ainda não existir, segue como null.
+    let idLanTaxa: number | null = null;
+    if (resultado.numeroInscricao != null) {
+      try {
+        const vinc = await obterIdLanInscricao({
+          codColigada: ctx.codColigada,
+          idps,
+          numeroInscricao: resultado.numeroInscricao,
+        });
+        idLanTaxa = vinc?.idLan ?? null;
+      } catch {
+        idLanTaxa = null;
+      }
+    }
     if (emailContato) {
       const origem = extrairOrigem(req);
       void registrarEventoFunil({
@@ -791,6 +808,11 @@ export async function POST(req: NextRequest) {
           cf_numero_inscricao: resultado.numeroInscricao ?? "",
           cf_valor_taxa: ctx.valorInscricao,
           cf_nome_candidato: dadosCandidato.nome ?? "",
+          cf_processo_seletivo: ctx.nomeProcesso ?? "",
+          // Reaproveita o campo PADRÃO da conta RD "Course of interest"
+          // (cf_course_of_interest): mapeado do nome do PS (curso/ano-série).
+          // Permite segmentar por interesse usando um campo que o RD já conhece.
+          cf_course_of_interest: ctx.nomeProcesso ?? "",
           cf_relacao_responsavel: rotuloRelacao,
           cf_responsavel_financeiro_distinto: respFinanceiroDistinto
             ? "sim"
@@ -816,6 +838,7 @@ export async function POST(req: NextRequest) {
       telefoneResponsavel: telefoneContato,
       nomeCandidato: dadosCandidato.nome,
       segmento: body.segmento,
+      processoSeletivo: ctx.nomeProcesso,
       valor: ctx.valorInscricao,
       idps,
       relacaoResponsavel: rotuloRelacao,
@@ -823,6 +846,7 @@ export async function POST(req: NextRequest) {
       respFinanceiroNome: rfNome,
       respFinanceiroEmail: rfEmail,
       respFinanceiroTelefone: rfTelefone,
+      idLan: idLanTaxa,
     });
 
     const res = NextResponse.json({

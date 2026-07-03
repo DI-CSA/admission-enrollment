@@ -796,6 +796,48 @@ export interface DependenteCandidato {
    * série inscrita. `null` quando não há programa (F1 / 1º ano) ou não resolvido.
    */
   codPrograma: string | null;
+  /** Código da situação da opção (SPSOPCAOINSCRITO.STATUS). */
+  situacaoCodigo: number | null;
+  /** Rótulo da situação (SPSSTATUSOPCAO.DESCRICAO, resolvido pela filial do PS). */
+  situacaoDescricao: string | null;
+  /**
+   * Coligada da inscrição — necessária para as chamadas de documentos da Central
+   * do Candidato (id = CODCOLIGADA|IDPS|IDAREAINTERESSE|NUMEROINSCRICAO).
+   */
+  codColigada: number | null;
+  /** Área de interesse da opção (SPSOPCAOINSCRITO.IDAREAINTERESSE), idem docs. */
+  idAreaInteresse: number | null;
+  /**
+   * Situação de pagamento da taxa de inscrição (título FLAN da inscrição, via
+   * SPSINSCRICAOAREAOFERTADA.IDLAN). `null` quando não há título vinculado.
+   */
+  pagamento: SituacaoPagamento | null;
+  /**
+   * Pontos de atenção do candidato para destaque na listagem (ex.: sininho).
+   * Cada item é um rótulo pronto para exibição. Hoje detecta "mensagem da
+   * secretaria sobre documento" (SPSDOCUMENTOENTREGUE.MOTIVO). Extensível.
+   */
+  atencoes: string[];
+}
+
+/**
+ * Situação financeira da taxa de inscrição. Lida por SQL do título FLAN (mesmo
+ * padrão de leitura da situação/documentos), pois a WebAPI EduPS não expõe a
+ * baixa (data/valor do pagamento) — só o InfoBoletoInscricao.STATUS.
+ */
+export interface SituacaoPagamento {
+  /** STATUSLAN do FLAN: 0=em aberto, 1=pago/baixado, 2=cancelado. */
+  statusLan: number | null;
+  /** true quando o título está baixado (STATUSLAN=1). */
+  pago: boolean;
+  /** Valor original do título (taxa). */
+  valorOriginal: number | null;
+  /** Valor efetivamente baixado (pago), quando houver. */
+  valorPago: number | null;
+  /** Data do pagamento/baixa (ISO), quando pago. */
+  dataPagamento: string | null;
+  /** Data de vencimento do título (ISO). */
+  dataVencimento: string | null;
 }
 
 interface DependenteRow {
@@ -805,6 +847,17 @@ interface DependenteRow {
   IDPS: number | null;
   PSNOME: string | null;
   CODHABILITACAO: string | null;
+  STATUS: number | null;
+  SITUACAODESC: string | null;
+  CODCOLIGADA: number | null;
+  IDAREAINTERESSE: number | null;
+  STATUSLAN: number | null;
+  DATABAIXA: Date | string | null;
+  VALORBAIXADO: number | null;
+  VALORORIGINAL: number | null;
+  DATAVENCIMENTO: Date | string | null;
+  /** >0 quando há observação/mensagem da secretaria em algum documento. */
+  TEMMOTIVODOC: number | null;
 }
 
 /**
@@ -854,7 +907,18 @@ contas AS (
      OR (resp.CPFNUM <> '' AND REPLACE(REPLACE(REPLACE(ISNULL(su.CPF, ''), '.', ''), '-', ''), ' ', '') = resp.CPFNUM)
 )
 SELECT u.CODUSUARIOPS, u.NOME, i.NUMEROINSCRICAO, i.IDPS, ps.NOME AS PSNOME,
-       MAX(hf.CODHABILITACAO) AS CODHABILITACAO
+       MAX(hf.CODHABILITACAO) AS CODHABILITACAO,
+       MAX(i.CODCOLIGADA) AS CODCOLIGADA,
+       MAX(o.IDAREAINTERESSE) AS IDAREAINTERESSE,
+       MAX(o.STATUS) AS STATUS,
+       MAX(st.DESCRICAO) AS SITUACAODESC,
+       MAX(fl.STATUSLAN) AS STATUSLAN,
+       MAX(fl.DATABAIXA) AS DATABAIXA,
+       MAX(fl.VALORBAIXADO) AS VALORBAIXADO,
+       MAX(fl.VALORORIGINAL) AS VALORORIGINAL,
+       MAX(fl.DATAVENCIMENTO) AS DATAVENCIMENTO,
+       MAX(CASE WHEN de.MOTIVO IS NOT NULL AND LTRIM(RTRIM(de.MOTIVO)) <> ''
+                THEN 1 ELSE 0 END) AS TEMMOTIVODOC
   FROM SPSUSUARIOTIPORELAC r
   JOIN contas c ON c.CODUSUARIOPS = r.CODUSUARIOTIPORELAC
   JOIN SPSUSUARIO u ON u.CODUSUARIOPS = r.CODUSUARIOPS
@@ -862,9 +926,14 @@ SELECT u.CODUSUARIOPS, u.NOME, i.NUMEROINSCRICAO, i.IDPS, ps.NOME AS PSNOME,
   JOIN SPSPROCESSOSELETIVO ps ON ps.CODCOLIGADA = i.CODCOLIGADA AND ps.IDPS = i.IDPS
   LEFT JOIN SPSOPCAOINSCRITO o ON o.NUMEROINSCRICAO = i.NUMEROINSCRICAO
        AND o.IDPS = i.IDPS AND o.CODCOLIGADA = i.CODCOLIGADA
+  LEFT JOIN SPSSTATUSOPCAO st ON st.CODIGO = o.STATUS
+       AND st.CODCOLIGADA = o.CODCOLIGADA AND st.CODFILIAL = ps.CODFILIAL
   LEFT JOIN SPSAREAINTERESSE ai ON ai.IDAREAINTERESSE = o.IDAREAINTERESSE
   LEFT JOIN SHABILITACAOFILIAL hf ON hf.IDHABILITACAOFILIAL = ai.IDHABILITACAOFILIAL
        AND hf.CODCOLIGADA = ai.CODCOLIGADAHABFILIAL
+  LEFT JOIN FLAN fl ON fl.CODCOLIGADA = i.CODCOLIGADALAN AND fl.IDLAN = i.IDLAN
+  LEFT JOIN SPSDOCUMENTOENTREGUE de ON de.CODCOLIGADA = i.CODCOLIGADA
+       AND de.IDPS = i.IDPS AND de.NUMEROINSCRICAO = i.NUMEROINSCRICAO
  WHERE r.CODUSUARIOPS <> r.CODUSUARIOTIPORELAC
    AND ps.NOME LIKE @ano
  GROUP BY u.CODUSUARIOPS, u.NOME, i.NUMEROINSCRICAO, i.IDPS, ps.NOME
@@ -880,7 +949,51 @@ SELECT u.CODUSUARIOPS, u.NOME, i.NUMEROINSCRICAO, i.IDPS, ps.NOME AS PSNOME,
     idps: r.IDPS ?? null,
     nomeProcesso: r.PSNOME?.trim() ?? null,
     codPrograma: codigoProgramaAvaliacoes(r.CODHABILITACAO),
+    situacaoCodigo: r.STATUS ?? null,
+    situacaoDescricao: r.SITUACAODESC?.trim() ?? null,
+    codColigada: r.CODCOLIGADA ?? null,
+    idAreaInteresse: r.IDAREAINTERESSE ?? null,
+    pagamento: montarSituacaoPagamento(r),
+    atencoes: montarAtencoes(r),
   }));
+}
+
+/**
+ * Deriva os "pontos de atenção" do candidato para destaque na listagem. Hoje:
+ * mensagem/observação da secretaria em algum documento (SPSDOCUMENTOENTREGUE.MOTIVO).
+ * Nova detecção futura entra aqui (ex.: documento obrigatório pendente).
+ */
+function montarAtencoes(r: DependenteRow): string[] {
+  const lista: string[] = [];
+  if ((r.TEMMOTIVODOC ?? 0) > 0)
+    lista.push("Mensagem da secretaria sobre documento");
+  return lista;
+}
+
+/** Converte um valor de data (Date do mssql ou string) em ISO, ou null. */
+function paraIso(v: Date | string | null | undefined): string | null {
+  if (v == null) return null;
+  const d = v instanceof Date ? v : new Date(v);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
+/**
+ * Monta a situação de pagamento a partir dos campos do FLAN na listagem. Retorna
+ * null quando não há título vinculado (sem VALORORIGINAL e sem STATUSLAN).
+ */
+function montarSituacaoPagamento(r: DependenteRow): SituacaoPagamento | null {
+  const temTitulo =
+    r.STATUSLAN != null || r.VALORORIGINAL != null || r.DATAVENCIMENTO != null;
+  if (!temTitulo) return null;
+  const statusLan = r.STATUSLAN ?? null;
+  return {
+    statusLan,
+    pago: statusLan === 1,
+    valorOriginal: r.VALORORIGINAL ?? null,
+    valorPago: r.VALORBAIXADO ?? null,
+    dataPagamento: statusLan === 1 ? paraIso(r.DATABAIXA) : null,
+    dataVencimento: paraIso(r.DATAVENCIMENTO),
+  };
 }
 
 // Informações do boleto da taxa de inscrição, conforme retornado por
@@ -937,6 +1050,35 @@ function temErroRm(payload: unknown): boolean {
   return false;
 }
 
+/**
+ * Recupera o IDLAN (lançamento financeiro da taxa) da inscrição por SQL, sem
+ * depender de cookie de sessão — funciona no fluxo logado E no cadastro novo
+ * (anônimo), logo após a inscrição ser criada. O IDLAN é a chave estável para
+ * reconciliar o pagamento no FLAN mais tarde (ex.: sincronizar o CRM quando a
+ * taxa for baixada). Retorna null quando ainda não há vínculo financeiro.
+ */
+export async function obterIdLanInscricao(params: {
+  codColigada: number;
+  idps: number;
+  numeroInscricao: number;
+}): Promise<{ idLan: number | null; codColigadaLan: number | null } | null> {
+  const { codColigada, idps, numeroInscricao } = params;
+  const rows = await query<{
+    IDLAN: number | null;
+    CODCOLIGADALAN: number | null;
+  }>(
+    `SELECT TOP 1 i.IDLAN, i.CODCOLIGADALAN
+       FROM SPSINSCRICAOAREAOFERTADA i
+      WHERE i.CODCOLIGADA = @cod AND i.IDPS = @idps
+        AND i.NUMEROINSCRICAO = @num
+      ORDER BY i.IDLAN DESC`,
+    { cod: codColigada, idps, num: numeroInscricao },
+  );
+  const r = rows[0];
+  if (!r) return null;
+  return { idLan: r.IDLAN ?? null, codColigadaLan: r.CODCOLIGADALAN ?? null };
+}
+
 /** Recupera as informações do boleto da taxa (GET Financeiro/InfoBoletoInscricao). */
 export async function obterBoletoInscricao(
   rmCookie: string,
@@ -980,6 +1122,55 @@ export async function obterBoletoInscricao(
     urlRegOnline: str("URLREGONLINE"),
     temPdf,
     bruto: b,
+  };
+}
+
+/**
+ * "STATUS DA INSCRIÇÃO" — o mesmo campo exibido no comprovante emitido pela
+ * EduPS. Fonte: GET CentralCandidato/v1/StatusCadastro?numeroInscricao=N
+ * (espelha o portal nativo: centralcandidato.factory.js → getStatusCadastro).
+ *
+ * A WebAPI devolve um único registro com:
+ *   STATUS         → 0 = "Inscrito - Pagamento pendente"
+ *                    1 = "Candidato (inscrição confirmada)"
+ *                    2 = "Excedente" (usa ORDEMEXCEDENTE)
+ *   ORDEMEXCEDENTE → posição na fila de excedentes (só quando STATUS === 2)
+ *   DT*INSCRICAO/SELECAO/RESULTADO → janelas do processo (não usadas aqui)
+ */
+export interface StatusCadastroInscricao {
+  status: number | null;
+  ordemExcedente: number | null;
+}
+
+export async function obterStatusCadastro(
+  rmCookie: string,
+  numeroInscricao: number,
+): Promise<StatusCadastroInscricao | null> {
+  const qs = new URLSearchParams({ numeroInscricao: String(numeroInscricao) });
+  const res = await rmFetch(
+    `CentralCandidato/v1/StatusCadastro?${qs.toString()}`,
+    {
+      webapi: WEBAPI,
+      cookie: rmCookie,
+    },
+  );
+  if (!res.ok) return null;
+
+  const json = await res.json();
+  if (temErroRm(json)) return null;
+  const b = primeiroRegistro(json);
+  if (!b) return null;
+
+  const num = (k: string) =>
+    typeof b[k] === "number"
+      ? (b[k] as number)
+      : b[k] != null && /^\d+$/.test(String(b[k]))
+        ? Number(b[k])
+        : null;
+
+  return {
+    status: num("STATUS"),
+    ordemExcedente: num("ORDEMEXCEDENTE"),
   };
 }
 
@@ -1072,4 +1263,330 @@ export async function obterComprovanteInscricao(
     return { base64: null, html: String(html), erro: null };
   }
   return { base64: null, html: null, erro: null };
+}
+
+// ---------------------------------------------------------------------------
+// Documentos da inscrição (Central do Candidato)
+//
+// LEITURA da SITUAÇÃO por SQL (mesmo padrão de listarDocumentosExigidos em
+// queries.ts): a situação de entrega é lida direto do CorporeRM porque é mais
+// simples e barato que orquestrar várias chamadas WebAPI:
+//   - SPSDOCUMENTOEXIGIDO + SDOCUMENTO → documentos exigidos (EXIGEINSCRICAO='T');
+//   - SPSARQUIVOSCANDIDATO            → arquivos enviados (nome/data);
+//   - SPSDOCUMENTOENTREGUE            → conferência da secretaria (ENTREGUE/MOTIVO).
+//
+// DOWNLOAD do CONTEÚDO pela WebAPI EduPS (GET CentralCandidato/v1/ApplicantFiles):
+// o blob SPSARQUIVOSCANDIDATO.ARQUIVO guarda apenas o marcador "file on server"
+// (14 bytes) — os bytes reais ficam no SERVIDOR de arquivos do RM, então SÓ a
+// WebAPI recupera o conteúdo. Convenção da rota (validada em produção, 2026-07):
+// `id` e `query` vão AMBOS como query string (?id=<chave>&query=), NÃO no path
+// (o path faz o IIS tratar como arquivo estático → 404). Resposta: [{ file:
+// base64, fileName }].
+//
+// A ESCRITA (substituição) continua pela WebAPI EduPS, respeitando as regras do PS.
+// ---------------------------------------------------------------------------
+
+/**
+ * O RM guarda o nome do arquivo como `nome¶sufixo` (o ¶ separa o nome original
+ * de um sufixo interno). Para exibição, junta o trecho antes do ¶ com a extensão.
+ */
+function nomeExibicaoArquivo(fileName: string): string {
+  const posSep = fileName.lastIndexOf("¶");
+  if (posSep < 0) return fileName;
+  const posExt = fileName.lastIndexOf(".");
+  const base = fileName.substring(0, posSep);
+  const ext = posExt > posSep ? fileName.substring(posExt) : "";
+  return base + ext;
+}
+
+export type SituacaoDocumento = "entregue" | "em_analise" | "pendente";
+
+export interface DocumentoInscricaoStatus {
+  /** CODDOCUMENTO (fileCode) do documento exigido. */
+  codDocumento: number | null;
+  descricao: string;
+  obrigatorio: boolean;
+  /** Observação da secretaria (RequiredDocument.reason / MOTIVO), quando houver. */
+  observacao: string | null;
+  situacao: SituacaoDocumento;
+  /** true quando o usuário ainda pode enviar/substituir o arquivo. */
+  podeSubstituir: boolean;
+  /** Nome do arquivo enviado (para exibição), quando já houver upload. */
+  nomeArquivo: string | null;
+  /** Chave para baixar o arquivo enviado por SQL (`COLIG|IDPS|NUM|NOMEARQUIVO`). */
+  chaveDownload: string | null;
+}
+
+/** Extrai o CODDOCUMENTO do NOMEARQUIVO (sufixo `¶CODCOLIGADA-IDPS-NUM-CODDOC.ext`). */
+function codDocumentoDoArquivo(nomeArquivo: string): number | null {
+  const posSep = nomeArquivo.lastIndexOf("¶");
+  if (posSep < 0) return null;
+  let sufixo = nomeArquivo.substring(posSep + 1);
+  const posExt = sufixo.lastIndexOf(".");
+  if (posExt >= 0) sufixo = sufixo.substring(0, posExt);
+  const partes = sufixo.split("-");
+  const cod = Number(partes[partes.length - 1]);
+  return Number.isFinite(cod) ? cod : null;
+}
+
+interface DocExigidoRow {
+  CODDOCUMENTO: number;
+  OBRIGATORIO: string | null;
+  DESCRICAO: string | null;
+  ENTREGUE: string | null;
+  MOTIVO: string | null;
+}
+
+interface ArquivoCandidatoRow {
+  NOMEARQUIVO: string | null;
+  DATAENVIO: Date | null;
+}
+
+/**
+ * Lista os documentos exigidos de uma inscrição com a situação de cada um
+ * (entregue/em análise/pendente), a observação da secretaria e se o candidato
+ * ainda pode substituir — TUDO por LEITURA SQL no CorporeRM (mesmo padrão do
+ * painel de candidatos). A escrita/substituição continua pela WebAPI EduPS.
+ *
+ * Regras (espelham a secretaria):
+ *  - documento exigido para inscrição = SPSDOCUMENTOEXIGIDO.EXIGEINSCRICAO='T';
+ *  - arquivo enviado = SPSARQUIVOSCANDIDATO cujo sufixo do NOMEARQUIVO
+ *    (`¶CODCOLIGADA-IDPS-NUM-CODDOCUMENTO`) casa com o CODDOCUMENTO;
+ *  - ENTREGUE='T' em SPSDOCUMENTOENTREGUE → conferido pela secretaria → NÃO pode
+ *    substituir; MOTIVO = observação exibida ao usuário.
+ */
+export async function listarDocumentosInscricao(params: {
+  codColigada: number;
+  idps: number;
+  idAreaInteresse: number;
+  numeroInscricao: number;
+}): Promise<DocumentoInscricaoStatus[]> {
+  const { codColigada, idps, idAreaInteresse, numeroInscricao } = params;
+
+  const exigidos = await query<DocExigidoRow>(
+    `
+SELECT de.CODDOCUMENTO,
+       de.OBRIGATORIO,
+       d.DESCRICAO,
+       ent.ENTREGUE,
+       ent.MOTIVO
+  FROM SPSDOCUMENTOEXIGIDO de
+  LEFT JOIN SDOCUMENTO d ON d.CODDOCUMENTO = de.CODDOCUMENTO
+  LEFT JOIN SPSDOCUMENTOENTREGUE ent
+         ON ent.CODCOLIGADA = de.CODCOLIGADA
+        AND ent.IDPS = de.IDPS
+        AND ent.CODDOCUMENTO = de.CODDOCUMENTO
+        AND ent.NUMEROINSCRICAO = @num
+ WHERE de.CODCOLIGADA = @cod
+   AND de.IDPS = @idps
+   AND de.IDAREAINTERESSE = @area
+   AND de.EXIGEINSCRICAO = 'T'
+ ORDER BY de.CODDOCUMENTO`,
+    { cod: codColigada, idps, area: idAreaInteresse, num: numeroInscricao },
+  );
+  if (exigidos.length === 0) return [];
+
+  const arquivos = await query<ArquivoCandidatoRow>(
+    `
+SELECT NOMEARQUIVO, DATAENVIO
+  FROM SPSARQUIVOSCANDIDATO
+ WHERE CODCOLIGADA = @cod AND IDPS = @idps AND NUMEROINSCRICAO = @num
+ ORDER BY DATAENVIO DESC`,
+    { cod: codColigada, idps, num: numeroInscricao },
+  );
+
+  // Indexa os arquivos enviados por CODDOCUMENTO (mais recente primeiro).
+  const arquivoPorDoc = new Map<number, string>();
+  for (const a of arquivos) {
+    const nome = a.NOMEARQUIVO ?? "";
+    const cod = codDocumentoDoArquivo(nome);
+    if (cod != null && !arquivoPorDoc.has(cod)) arquivoPorDoc.set(cod, nome);
+  }
+
+  // Grupo do candidato (campo complementar GRUPO em SPSINSCAREAOFERTACOMPL):
+  // GRP2 = "Filho de ex-aluno". O documento comprobatório de ex-aluno é opcional
+  // e só faz sentido para esse grupo — para os demais, escondemos da lista (não
+  // é pendência nem exigência). Se o grupo não puder ser lido, mantemos o doc.
+  const grupoRows = await query<{ GRUPO: string | null }>(
+    `SELECT TOP 1 GRUPO FROM SPSINSCAREAOFERTACOMPL
+      WHERE CODCOLIGADA = @cod AND IDPS = @idps AND NUMEROINSCRICAO = @num`,
+    { cod: codColigada, idps, num: numeroInscricao },
+  );
+  const ehExAluno =
+    String(grupoRows[0]?.GRUPO ?? "")
+      .trim()
+      .toUpperCase() === "GRP2";
+  const ehDocExAluno = (descricao: string) => /ex[\s-]*aluno/i.test(descricao);
+
+  return exigidos
+    .filter((doc) => ehExAluno || !ehDocExAluno(String(doc.DESCRICAO ?? "")))
+    .map((doc) => {
+      const codDoc = doc.CODDOCUMENTO;
+      const fileNameBruto = arquivoPorDoc.get(codDoc) ?? "";
+      const temArquivo = fileNameBruto !== "";
+      const entregue =
+        String(doc.ENTREGUE ?? "")
+          .trim()
+          .toUpperCase() === "T";
+      const observacao =
+        doc.MOTIVO != null && String(doc.MOTIVO).trim() !== ""
+          ? String(doc.MOTIVO).trim()
+          : null;
+
+      return {
+        codDocumento: codDoc,
+        // Descrição CRUA (com eventual prefixo "(*)"): além de exibir, ela é o
+        // DETALHE usado na substituição — o backend identifica o documento pelo
+        // match EXATO do DETALHE com a descrição da config (o CODDOCUMENTO enviado
+        // no payload é ignorado). Limpar o "(*)" quebraria a substituição.
+        descricao: String(doc.DESCRICAO ?? "").trim(),
+        obrigatorio:
+          String(doc.OBRIGATORIO ?? "")
+            .trim()
+            .toUpperCase() === "T",
+        observacao,
+        situacao: entregue
+          ? "entregue"
+          : temArquivo
+            ? "em_analise"
+            : "pendente",
+        podeSubstituir: !entregue,
+        nomeArquivo: temArquivo ? nomeExibicaoArquivo(fileNameBruto) : null,
+        chaveDownload: temArquivo
+          ? `${codColigada}|${idps}|${numeroInscricao}|${fileNameBruto}`
+          : null,
+      };
+    });
+}
+
+/** Arquivo de documento para download (base64 + nome de exibição). */
+export interface ArquivoDocumento {
+  base64: string;
+  nomeArquivo: string;
+}
+
+/**
+ * Baixa o conteúdo de um arquivo já enviado pela WebAPI EduPS
+ * (GET CentralCandidato/v1/ApplicantFiles). `chave` =
+ * `CODCOLIGADA|IDPS|NUMEROINSCRICAO|NOMEARQUIVO` (NOMEARQUIVO cru, com o sufixo
+ * `¶...`). Espelha o `getArquivoDownload` do portal nativo: `id` = chave e
+ * `query` = '' vão AMBOS na query string. Retorna o base64 e o nome de exibição,
+ * ou null quando indisponível. `rmCookie` deve estar escopado ao IDPS da chave.
+ */
+export async function baixarArquivoDocumento(
+  rmCookie: string,
+  chave: string,
+): Promise<ArquivoDocumento | null> {
+  const partes = chave.split("|");
+  if (partes.length < 4) return null;
+  // O NOMEARQUIVO pode teoricamente conter "|"? Não — o separador do sufixo é
+  // "¶". Ainda assim, reconstituímos o restante para robustez.
+  const nomeArquivo = partes.slice(3).join("|");
+  if (nomeArquivo === "") return null;
+
+  // Convenção confirmada: id (chave) e query ('') AMBOS na query string. Enviar
+  // no path faz o IIS servir como estático (404).
+  const path =
+    "CentralCandidato/v1/ApplicantFiles" +
+    `?id=${encodeURIComponent(chave)}&query=${encodeURIComponent("")}`;
+  const res = await rmFetch(path, { webapi: WEBAPI, cookie: rmCookie });
+  if (!res.ok) return null;
+
+  const json = (await res.json().catch(() => null)) as unknown;
+  const arr = Array.isArray((json as { data?: unknown })?.data)
+    ? ((json as { data: unknown[] }).data as Array<Record<string, unknown>>)
+    : Array.isArray(json)
+      ? (json as Array<Record<string, unknown>>)
+      : null;
+  const primeiro = arr?.[0];
+  if (!primeiro) return null;
+
+  const base64 = (primeiro.file ?? primeiro.File) as string | undefined;
+  if (!base64 || String(base64).trim() === "") return null;
+  const fileName =
+    (primeiro.fileName as string | undefined) ??
+    (primeiro.FileName as string | undefined) ??
+    nomeArquivo;
+
+  return {
+    base64: String(base64),
+    nomeArquivo: nomeExibicaoArquivo(fileName),
+  };
+}
+
+/** Resultado de uma substituição/envio de documento. */
+export interface ResultadoSubstituicao {
+  ok: boolean;
+  erro: string | null;
+}
+
+/**
+ * Envia (ou substitui) o arquivo de um documento da inscrição
+ * (POST CentralCandidato/v1/ApplicantFilesUpload), espelhando o `saveSelectedFiles`
+ * do portal nativo. Validado em produção (2026-07): o endpoint EXISTE e aceita o
+ * modelo `{ SPSDOCUMENTOSEXIGIDOS: [{ ...ARQUIVO: <base64 STRING> }] }`.
+ *
+ * DETALHES CRÍTICOS (descobertos em teste):
+ *  - `ARQUIVO` deve ser a STRING base64 pura — enviar `{ Arquivo: base64 }` dá HTTP 500;
+ *  - o backend identifica o documento pelo MATCH EXATO de `DETALHE` com a descrição
+ *    da config (SDOCUMENTO.DESCRICAO, COM eventual prefixo "(*)"). Por isso `descricao`
+ *    deve ser a descrição CRUA; um CODDOCUMENTO no payload é ignorado.
+ * O upload SUBSTITUI o arquivo do documento. A permissão (podeSubstituir) é
+ * revalidada na camada de rota antes de chamar aqui.
+ */
+export async function substituirArquivoDocumento(params: {
+  rmCookie: string;
+  codColigada: number;
+  idps: number;
+  numeroInscricao: number;
+  descricao: string;
+  nomeArquivo: string;
+  arquivoBase64: string;
+}): Promise<ResultadoSubstituicao> {
+  const {
+    rmCookie,
+    codColigada,
+    idps,
+    numeroInscricao,
+    descricao,
+    nomeArquivo,
+    arquivoBase64,
+  } = params;
+
+  const model = {
+    SPSDOCUMENTOSEXIGIDOS: [
+      {
+        CODCOLIGADA: codColigada,
+        IDPS: idps,
+        NUMEROINSCRICAO: numeroInscricao,
+        DETALHE: descricao,
+        NOMEARQUIVO: nomeArquivo,
+        ARQUIVO: arquivoBase64,
+        NOMEORIGINAL: nomeArquivo,
+      },
+    ],
+  };
+
+  const res = await rmFetch("CentralCandidato/v1/ApplicantFilesUpload", {
+    webapi: WEBAPI,
+    method: "POST",
+    body: model,
+    cookie: rmCookie,
+  });
+
+  if (!res.ok) {
+    return { ok: false, erro: `HTTP ${res.status}` };
+  }
+
+  // A EduPS pode responder 200 com envelope de exceção (mesmo padrão do upload
+  // de documentos na NovaInscricao). Detecta chave "*exception*".
+  const json = await res.json().catch(() => null);
+  const env = (json as { data?: unknown })?.data ?? json;
+  if (env && typeof env === "object" && !Array.isArray(env)) {
+    const entradaErro = Object.entries(env as Record<string, unknown>).find(
+      ([k]) => /exception/i.test(k),
+    );
+    if (entradaErro) return { ok: false, erro: String(entradaErro[1]) };
+  }
+  return { ok: true, erro: null };
 }

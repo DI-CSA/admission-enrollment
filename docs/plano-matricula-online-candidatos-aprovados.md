@@ -2,6 +2,19 @@
 
 Estender a plataforma Next.js com um **fluxo dedicado de matrícula** para candidatos aprovados/em chamada, espelhando a arquitetura da inscrição (BFF + módulos `lib/totvs` + wizard client) e **dirigido pelos `ParametrosMatriculaAreaOfertada` do RM**. Como a config de 2027 e o uso de contrato ainda são incógnitas, a **Fase 0** faz uma descoberta *read-only* que fixa quais passos entram; depois construímos o wizard completo (dados → documentos → planos → contrato/assinatura → confirmação → boleto), reaproveitando re-login por PS (`garantirSessaoNoIdps`), leituras SQL e os padrões de upload/boleto já validados.
 
+## Estado atual (2026-07-03)
+
+> **Matrícula está PAUSADA por decisão de priorização — o foco atual é o Processo Seletivo (situação da inscrição + documentos).** Este documento fica como referência para retomar depois.
+
+- **Fase 0 — CONCLUÍDA** (descoberta read-only; ver abaixo).
+- **Fases 1–2 — scaffolding no `main`.** O merge `feature/matricula-online → main` (commit `a4120ac`, `--no-ff`) trouxe para o `main`:
+  - `lib/totvs/matricula.ts` (wrappers `rmFetch`: `obterResultadoAreaInteresse`, parâmetros, período, documentos de matrícula, etc.);
+  - função aditiva de elegibilidade em `lib/totvs/queries.ts` (`listarCandidatosElegiveisMatricula`);
+  - guard `matriculaSomenteLeitura()` (flag `MATRICULA_SOMENTE_LEITURA`, fail-safe ligado).
+  - Verificação: o fonte de produção (VM `csa-portal01`) foi comparado byte-a-byte — o código de inscrição é idêntico ao de produção e a matrícula é um superset **aditivo**. `tsc --noEmit` limpo. `main` já foi **pushado** para `origin`.
+- **Bloqueio de E2E:** em produção **todas as opções 2027 estão com `STATUS=0`** (ninguém em chamada) ⇒ E2E de matrícula só é possível em **homolog** (`HomologacaoRM`) ou após a secretaria abrir chamadas.
+- **Pendente (quando retomar):** rotas `app/api/matricula/**`, página `/matricula`, `WizardMatricula.tsx` (Fases 2–5). Nada disso foi implementado ainda.
+
 ## Fases
 
 1. **Fase 0 — Descoberta e verificação de config (read-only, bloqueia o resto). ✅ CONCLUÍDA.** Script `plataforma/scripts/totvs-matricula-descoberta.mjs` (read-only). Resultados:
