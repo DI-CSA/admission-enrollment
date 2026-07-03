@@ -4,7 +4,13 @@ Estender a plataforma Next.js com um **fluxo dedicado de matrícula** para candi
 
 ## Fases
 
-1. **Fase 0 — Descoberta e verificação de config (read-only, bloqueia o resto).** Scripts de leitura contra prod/homolog para: (a) confirmar como a aprovação é gravada — `SPSOPCAOINSCRITO.STATUS` (valor = *EmChamada*/*CompareceuChamada*) + `SPSAREAOFERTADA.DISPONIBILIZAMATRICULAPORTAL`; (b) chamar `GetParametrosMatriculaAreaOfertada` das áreas 2027 e montar a **matriz de flags** (`CadastraContrato`, `UtilizaTokenAssinaturaContrato`, `PermiteEnvioDeDocumentos`, `ExibirItinerario`, `FichaMedica*`, `Atualiza*/Obriga*`); (c) checar `PeriodoMatricula` + planos/contrato/documentos exigidos configurados; (d) mapear `idAreaOfertada ↔ idAreaInteresse`. **Entrega: matriz que decide os passos.** Pode exigir config do RM antes do E2E em produção.
+1. **Fase 0 — Descoberta e verificação de config (read-only, bloqueia o resto). ✅ CONCLUÍDA.** Script `plataforma/scripts/totvs-matricula-descoberta.mjs` (read-only). Resultados:
+   - **Elegibilidade:** `SPSOPCAOINSCRITO.STATUS` (smallint) ∈ `{5=EmChamada, 7=CompareceuChamada}` **e** `SPSAREAOFERTADA.DISPONIBILIZAMATRICULAPORTAL='T'`. Enum `EduPSStatusOpcaoInscrito` (FrameHTML `js/utils/edups-enums.constants.js`).
+   - **`idAreaOfertada` (param da WebAPI) = `IDAREAINTERESSE`** — não há surrogate; área ofertada = `(CODCOLIGADA, IDPS, IDAREAINTERESSE)`.
+   - **Ciclo 2027:** PS `210–220` (11 PS, 1/série), `IDAREAINTERESSE` `590–600`; todas com `STATUS='T'` e `DISPONIBILIZAMATRICULAPORTAL='T'`. **Hoje as 16 opções estão todas com `STATUS=0`** → ninguém elegível ainda ⇒ **E2E só em homolog** (`HomologacaoRM`) ou após resultados/chamada.
+   - **Sem itinerário** (`MIN/MAXIMOITINERARIOS` nulos) → passo OFF para 2027.
+   - **Config:** `SPSPARAMETROPS` tem `UTILIZAFICHAMEDICA`, `TEXTOCONFIRMACAOMATRICCENTRAL`, `TEXTOINSTRUCOESMATRICULA`; existem `SPLANOPGTO`, `SCONTRATO`, `FCONTRATOMODELO`, `SASSINATURACONTRATO`.
+   - **Autoridade em runtime:** `GetParametrosMatriculaAreaOfertada` decide quais passos ligam (`CadastraContrato`, `UtilizaTokenAssinaturaContrato`, `PermiteEnvioDeDocumentos`, `ExibirItinerario`, `FichaMedica*`, `Atualiza*/Obriga*`) — o wizard é dirigido por essa resposta.
 
 2. **Fase 1 — Camada de serviço + BFF** *(depende de 0)*. Novo `lib/totvs/matricula.ts` espelhando `lib/totvs/inscricao.ts` (wrappers tipados sobre `rmFetch`, desembrulho de envelope + detecção de 200-com-exception como em `criarInscricao`). SQL de elegibilidade em `lib/totvs/queries.ts` (todos os PS, como `listarDependentesDoResponsavel`, pois `ResultadoAreaInteresse` é PS-scoped). Rotas `app/api/matricula/*` (elegiveis, parametros, periodo, dados, documentos, planos, contrato, confirmar, boleto) usando `sessaoDaRequisicao` + `garantirSessaoNoIdps(sessao, idps)`; guard `MATRICULA_SOMENTE_LEITURA` no commit.
 
