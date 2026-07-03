@@ -14,9 +14,8 @@ export function Diferenciais() {
             Por que o CSA Leblon
           </h2>
           <p className="mt-3 text-cinza-suave">
-            Tradição e excelência a serviço da formação integral do seu filho.
-            Clique em cada tema para conhecer mais, com conteúdo do site da
-            escola.
+            Tradição e excelência a serviço da formação integral. Clique em cada
+            tema para conhecer mais, com conteúdo do site da escola.
           </p>
         </div>
 

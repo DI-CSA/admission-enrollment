@@ -730,61 +730,65 @@ export function PainelResponsavel({
                               {formatarDataBr(d.pagamento.dataVencimento)}
                             </p>
                           ) : null}
-                          {boleto === "carregando" ? (
-                            <p className="text-cinza-suave">
-                              Carregando boleto…
-                            </p>
-                          ) : boleto && boleto !== "erro" ? (
-                            boleto.temPdf && boleto.idBoleto ? (
-                              <>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    baixarBoletoPdf(boleto.idBoleto!)
-                                  }
-                                  disabled={baixandoPdf}
+                          {/* Pagamento confirmado: não faz sentido oferecer 2ª via
+                             nem o fallback de "boleto sendo gerado". Só exibimos a
+                             confirmação acima. */}
+                          {!d.pagamento?.pago &&
+                            (boleto === "carregando" ? (
+                              <p className="text-cinza-suave">
+                                Carregando boleto…
+                              </p>
+                            ) : boleto && boleto !== "erro" ? (
+                              boleto.temPdf && boleto.idBoleto ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      baixarBoletoPdf(boleto.idBoleto!)
+                                    }
+                                    disabled={baixandoPdf}
+                                    className={botaoBoleto}
+                                  >
+                                    {baixandoPdf
+                                      ? "Gerando boleto…"
+                                      : "Baixar boleto (PDF)"}
+                                  </button>
+                                  {erroPdf && (
+                                    <p className="text-xs text-csa-vermelho">
+                                      {erroPdf}
+                                    </p>
+                                  )}
+                                </>
+                              ) : boleto.urlBoletoFixo ? (
+                                <a
+                                  href={boleto.urlBoletoFixo}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
                                   className={botaoBoleto}
                                 >
-                                  {baixandoPdf
-                                    ? "Gerando boleto…"
-                                    : "Baixar boleto (PDF)"}
-                                </button>
-                                {erroPdf && (
-                                  <p className="text-xs text-csa-vermelho">
-                                    {erroPdf}
-                                  </p>
-                                )}
-                              </>
-                            ) : boleto.urlBoletoFixo ? (
-                              <a
-                                href={boleto.urlBoletoFixo}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className={botaoBoleto}
-                              >
-                                Abrir boleto
-                              </a>
+                                  Abrir boleto
+                                </a>
+                              ) : (
+                                <p className="text-cinza-suave">
+                                  Boleto indisponível no momento. Você poderá
+                                  emiti-lo depois na central do candidato.
+                                </p>
+                              )
                             ) : (
-                              <p className="text-cinza-suave">
-                                Boleto indisponível no momento. Você poderá
-                                emiti-lo depois na central do candidato.
-                              </p>
-                            )
-                          ) : (
-                            <div className="space-y-2">
-                              <p className="text-cinza-suave">
-                                O boleto ainda está sendo gerado. Tente
-                                atualizar em instantes.
-                              </p>
-                              <button
-                                type="button"
-                                onClick={() => carregarBoleto(d)}
-                                className={botaoSecundario}
-                              >
-                                Atualizar boleto
-                              </button>
-                            </div>
-                          )}
+                              <div className="space-y-2">
+                                <p className="text-cinza-suave">
+                                  O boleto ainda está sendo gerado. Tente
+                                  atualizar em instantes.
+                                </p>
+                                <button
+                                  type="button"
+                                  onClick={() => carregarBoleto(d)}
+                                  className={botaoSecundario}
+                                >
+                                  Atualizar boleto
+                                </button>
+                              </div>
+                            ))}
                         </div>
 
                         <div className="space-y-2 rounded-lg bg-areia px-3 py-3">
