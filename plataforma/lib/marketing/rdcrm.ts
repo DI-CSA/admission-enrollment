@@ -224,3 +224,124 @@ export async function registrarNegociacaoInscricao(
     console.warn("[rdcrm] falha ao criar negociação:", nomeNegociacao, e);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Conciliação de pagamento — localizar e avançar a negociação no funil
+// ---------------------------------------------------------------------------
+//
+// Com a decisão de usar CAMPOS PADRÃO do deal (sem custom fields), a chave de
+// reconciliação passou a ser o NOME da negociação ("Inscrição nº N"), que casa
+// com o número da inscrição no RM. O job de conciliação (rota protegida por
+// cron) usa estas funções para achar o deal e movê-lo para "Taxa paga".
+
+const RD_CRM_BASE = "https://crm.rdstation.com/api/v1";
+
+/** Negociação encontrada no CRM (subconjunto dos campos que usamos). */
+export interface NegociacaoCrm {
+  id: string;
+  nome: string;
+  /** Id da etapa (funil) atual da negociação. */
+  dealStageId: string | null;
+  dealStageName: string | null;
+}
+
+/** Extrai o id da etapa de um objeto `deal_stage` (a API varia entre id/_id). */
+function extrairStageId(dealStage: unknown): string | null {
+  if (!dealStage || typeof dealStage !== "object") return null;
+  const s = dealStage as { id?: unknown; _id?: unknown };
+  if (typeof s.id === "string") return s.id;
+  if (typeof s._id === "string") return s._id;
+  return null;
+}
+
+function extrairStageName(dealStage: unknown): string | null {
+  if (!dealStage || typeof dealStage !== "object") return null;
+  const s = dealStage as { name?: unknown };
+  return typeof s.name === "string" ? s.name : null;
+}
+
+/**
+ * Localiza a negociação da inscrição pelo nome ("Inscrição nº N"). Retorna a
+ * PRIMEIRA que casar exatamente pelo número (a busca por `name` no CRM é por
+ * substring, então "nº 1" também traria "nº 12" — filtramos pela fronteira).
+ * Nunca lança: em falha retorna null e registra log.
+ */
+export async function buscarNegociacaoPorNumeroInscricao(
+  numeroInscricao: number | string,
+): Promise<NegociacaoCrm | null> {
+  const token = process.env.RD_CRM_TOKEN;
+  if (!token) return null;
+
+  const base = `Inscrição nº ${numeroInscricao}`;
+  try {
+    const res = await fetch(
+      `${RD_CRM_BASE}/deals?token=${encodeURIComponent(token)}&name=${encodeURIComponent(base)}&limit=200`,
+      { method: "GET", headers: { Accept: "application/json" } },
+    );
+    if (!res.ok) {
+      console.warn("[rdcrm] busca negociação não-OK:", res.status, base);
+      return null;
+    }
+    const body = (await res.json()) as unknown;
+    const lista = extrairListaDeals(body);
+    // Casa pelo número exato: nome === base OU começa com "base " (o formato é
+    // sempre "Inscrição nº N — Candidato"). Evita "nº 1" casar com "nº 12".
+    const alvo = lista.find((d) => {
+      const nome = typeof d?.name === "string" ? d.name : "";
+      return nome === base || nome.startsWith(`${base} `);
+    });
+    if (!alvo) return null;
+    return {
+      id: String(alvo.id ?? alvo._id ?? ""),
+      nome: typeof alvo.name === "string" ? alvo.name : base,
+      dealStageId: extrairStageId(alvo.deal_stage),
+      dealStageName: extrairStageName(alvo.deal_stage),
+    };
+  } catch (e) {
+    console.warn("[rdcrm] falha ao buscar negociação:", base, e);
+    return null;
+  }
+}
+
+/** Normaliza a resposta do GET /deals (array direto ou {deals:[...]}). */
+function extrairListaDeals(body: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(body)) return body as Array<Record<string, unknown>>;
+  if (body && typeof body === "object") {
+    const d = (body as { deals?: unknown }).deals;
+    if (Array.isArray(d)) return d as Array<Record<string, unknown>>;
+  }
+  return [];
+}
+
+/**
+ * Move a negociação para uma etapa do funil (PUT /deals/{id}). Retorna true no
+ * sucesso. Nunca lança: em falha retorna false e registra log.
+ */
+export async function moverNegociacaoParaEtapa(
+  dealId: string,
+  dealStageId: string,
+): Promise<boolean> {
+  const token = process.env.RD_CRM_TOKEN;
+  if (!token || !dealId || !dealStageId) return false;
+  try {
+    const res = await fetch(
+      `${RD_CRM_BASE}/deals/${encodeURIComponent(dealId)}?token=${encodeURIComponent(token)}`,
+      {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({ deal: { deal_stage_id: dealStageId } }),
+      },
+    );
+    if (!res.ok) {
+      console.warn("[rdcrm] mover negociação não-OK:", res.status, dealId);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.warn("[rdcrm] falha ao mover negociação:", dealId, e);
+    return false;
+  }
+}

@@ -871,3 +871,88 @@ SELECT u.CODUSUARIOPS, u.NOME, i.NUMEROINSCRICAO, i.IDPS,
     nomeProcesso: str(r.PSNOME),
   }));
 }
+
+// ---------------------------------------------------------------------------
+// Conciliação de pagamento da taxa (job de sincronização com o RD Station CRM)
+// ---------------------------------------------------------------------------
+
+/** Inscrição do ciclo atual com a taxa PAGA (título FLAN baixado). */
+export interface InscricaoPagaConciliar {
+  numeroInscricao: number;
+  idps: number;
+  codColigada: number;
+  nomeCandidato: string | null;
+  /** Data da baixa do título (ISO) — quando a taxa foi paga. */
+  dataPagamento: string | null;
+  /** Contato do responsável pela inscrição (para o evento de Marketing). */
+  emailResponsavel: string | null;
+  nomeResponsavel: string | null;
+}
+
+interface InscricaoPagaRow {
+  NUMEROINSCRICAO: number;
+  IDPS: number;
+  CODCOLIGADA: number;
+  NOMECANDIDATO: string | null;
+  DATABAIXA: Date | string | null;
+  EMAILRESP: string | null;
+  NOMERESP: string | null;
+}
+
+/**
+ * Lista as inscrições do ciclo atual cuja taxa já foi PAGA (FLAN.STATUSLAN=1),
+ * com o contato do responsável pela inscrição. Usada pelo job de conciliação
+ * para avançar a negociação no RD Station CRM (etapa "Taxa paga") e disparar o
+ * evento de Marketing "pagamento-confirmado".
+ *
+ * O ano do ciclo só existe no NOME do PS (não há coluna de período letivo) →
+ * filtramos por ele; configurável por `PS_ANO_ATUAL` (default = ANO_PROCESSO).
+ */
+export async function listarInscricoesPagasParaConciliar(): Promise<
+  InscricaoPagaConciliar[]
+> {
+  const anoAtual = process.env.PS_ANO_ATUAL?.trim() || String(ANO_PROCESSO);
+  const rows = await query<InscricaoPagaRow>(
+    `
+SELECT i.NUMEROINSCRICAO, i.IDPS, i.CODCOLIGADA,
+       u.NOME AS NOMECANDIDATO,
+       fl.DATABAIXA,
+       resp.NOME AS NOMERESP,
+       resp.EMAIL AS EMAILRESP
+  FROM SPSINSCRICAOAREAOFERTADA i
+  JOIN SPSPROCESSOSELETIVO ps ON ps.CODCOLIGADA = i.CODCOLIGADA AND ps.IDPS = i.IDPS
+  JOIN FLAN fl ON fl.CODCOLIGADA = i.CODCOLIGADALAN AND fl.IDLAN = i.IDLAN
+       AND fl.STATUSLAN = 1
+  JOIN SPSUSUARIO u ON u.CODUSUARIOPS = i.CODUSUARIOPS
+  OUTER APPLY (
+    SELECT TOP 1 ru.NOME, ru.EMAIL
+      FROM SPSUSUARIOTIPORELAC r
+      JOIN SPSUSUARIO ru ON ru.CODUSUARIOPS = r.CODUSUARIOTIPORELAC
+     WHERE r.CODUSUARIOPS = i.CODUSUARIOPS
+       AND r.TIPORELAC = 5
+       AND r.CODUSUARIOPS <> r.CODUSUARIOTIPORELAC
+       AND ru.EMAIL IS NOT NULL AND LTRIM(RTRIM(ru.EMAIL)) <> ''
+     ORDER BY ru.CODUSUARIOPS DESC
+  ) resp
+ WHERE ps.NOME LIKE @ano
+ ORDER BY i.NUMEROINSCRICAO`,
+    { ano: `%${anoAtual}%` },
+  );
+
+  return rows.map((r) => ({
+    numeroInscricao: r.NUMEROINSCRICAO,
+    idps: r.IDPS,
+    codColigada: r.CODCOLIGADA,
+    nomeCandidato: r.NOMECANDIDATO?.trim() ?? null,
+    dataPagamento: dataParaIso(r.DATABAIXA),
+    emailResponsavel: r.EMAILRESP?.trim() || null,
+    nomeResponsavel: r.NOMERESP?.trim() || null,
+  }));
+}
+
+/** Converte data do mssql (Date ou string) em ISO, ou null. */
+function dataParaIso(v: Date | string | null | undefined): string | null {
+  if (v == null) return null;
+  const d = v instanceof Date ? v : new Date(v);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}

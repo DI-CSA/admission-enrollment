@@ -577,44 +577,43 @@ define data de evento). O mesmo vale para a data de criação do deal no CRM.
 
 ---
 
-## 11. Job de conciliação de pagamento (cron 2×/dia)
+## 11. Job de conciliação de pagamento (cron 2×/dia) — IMPLEMENTADO
 
 **Objetivo:** sem intervenção manual, detectar quando a **taxa foi paga** e refletir no
 RD: mover o deal para *Taxa paga* e disparar o evento `pagamento-confirmado` no Marketing.
 
-**Como funciona:**
+**Como funciona (implementação atual):**
 
-1. **Detecção (RM/SQL):** seleciona as inscrições cuja taxa está **paga** —
-   `FLAN.STATUSLAN = 1` (com `DATABAIXA`), cruzando por `IDLAN`/`CODCOLIGADALAN` (a mesma
-   ponte de [obterIdLanInscricao](../plataforma/lib/totvs/inscricao.ts)).
-2. **Localizar o deal no CRM:** duas opções —
-   - **Recomendada (robusta):** guardar o `deal_id` retornado na criação numa **tabela de
-     controle no RM** (convenção `CSA_*`, ex.: `CSA_RD_CRM_SYNC(CODCOLIGADA, IDLAN,
-     DEAL_ID, CRIADO_EM, PAGO_SINCRONIZADO_EM)`). O job lê os não-sincronizados e resolve
-     direto pelo `deal_id`. **Criar tabela = infra compartilhada → precisa da sua
-     confirmação.**
-   - **Sem tabela (mais simples):** buscar o deal (CRM v1 *List deals* por nome/`IDLAN`) e
-     usar o **estado atual como idempotência** (só move se ainda não está em *Taxa paga*).
-3. **Atualizar:** CRM v1 *Update deal* (PUT) → move para `RD_CRM_DEAL_STAGE_PAGO_ID`
-   (e/ou marca ganho); Marketing → conversão `pagamento-confirmado` (dedup por e-mail).
-4. **Idempotência:** flag `PAGO_SINCRONIZADO_EM` (opção A) ou checagem de estágio
-   (opção B). Nunca reprocessa o que já foi conciliado.
+1. **Detecção (RM/SQL):** [listarInscricoesPagasParaConciliar](../plataforma/lib/totvs/queries.ts)
+   seleciona as inscrições do ciclo (filtro por ano no nome do PS) cuja taxa está **paga** —
+   `FLAN.STATUSLAN = 1` (com `DATABAIXA`) — e traz o contato do responsável pela inscrição
+   (`SPSUSUARIOTIPORELAC` TIPORELAC=5) para o evento de Marketing.
+2. **Localizar o deal no CRM (por nome — opção B, sem tabela de controle):**
+   [buscarNegociacaoPorNumeroInscricao](../plataforma/lib/marketing/rdcrm.ts) faz
+   *List deals* (`GET /deals?name=Inscrição nº N`) e casa pela **fronteira exata** do
+   número (evita "nº 1" casar com "nº 12"). Não precisa do `deal_id` guardado nem de
+   custom field `IDLAN` (removidos na decisão de campos padrão — §7.6).
+3. **Atualizar:** [moverNegociacaoParaEtapa](../plataforma/lib/marketing/rdcrm.ts) faz
+   *Update deal* (PUT) → move para `RD_CRM_DEAL_STAGE_PAGO_ID`; em seguida, Marketing →
+   conversão `pagamento-confirmado` (dedup por e-mail), só após mover o deal.
+4. **Idempotência (checagem de estágio):** só **avança** quem está em *Inscrito*
+   (`RD_CRM_DEAL_STAGE_ID`); pula quem já está em *Taxa paga* ou etapa posterior. Assim o
+   evento de Marketing é disparado no máximo 1× por inscrição. Nunca regride nem reprocessa.
 5. **Não-bloqueante e logado**, como as demais integrações.
 
-**Execução (2×/dia):** como o Next.js roda na **VM Windows**, o mais direto é o
-**Agendador de Tarefas do Windows** chamando o script, ou um `curl` para uma **rota
-protegida** do BFF:
+**Execução (2×/dia):** rota protegida [POST /api/jobs/conciliar-pagamentos](../plataforma/app/api/jobs/conciliar-pagamentos/route.ts),
+protegida por header `x-cron-secret: $CRON_SECRET` (comparação em tempo constante; sem
+`CRON_SECRET` a rota fica desabilitada → 503). Cron na VM:
 
-- Opção script: `node --env-file=.env.local scripts/conciliar-pagamentos.mjs` às 08h e 18h.
-- Opção rota: `POST /api/jobs/conciliar-pagamentos` protegida por header
-  `Authorization: Bearer $CRON_SECRET` (evita execução por terceiros).
+```bash
+curl -fsS -X POST -H "x-cron-secret: $CRON_SECRET" \
+  http://127.0.0.1:3000/api/jobs/conciliar-pagamentos
+```
 
-**Env necessárias:** `RD_CRM_DEAL_STAGE_PAGO_ID` (etapa destino) e, na opção rota,
-`CRON_SECRET`.
+Resposta JSON: `{ ok, verificadas, movidas, jaAvancadas, semDeal, falhas }`.
 
-**Arquivos a criar:** `plataforma/scripts/conciliar-pagamentos.mjs` (+ opcional
-`app/api/jobs/conciliar-pagamentos/route.ts`) e, se optar pela tabela, a lib de acesso a
-`CSA_RD_CRM_SYNC`.
+**Env necessárias:** `RD_CRM_TOKEN`, `RD_CRM_DEAL_STAGE_PAGO_ID` (etapa destino),
+`RD_CRM_DEAL_STAGE_ID` (etapa *Inscrito*, referência de idempotência) e `CRON_SECRET`.
 
 ### 11.1 Checklist de retomada (o que já está pronto e o que falta decidir)
 
