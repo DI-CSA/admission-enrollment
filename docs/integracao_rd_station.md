@@ -375,7 +375,7 @@ padrão** do deal. O mapeamento é:
 
 | Dado do portal | Campo padrão do CRM | Observação |
 | --- | --- | --- |
-| Nº da inscrição + candidato | **Nome do negócio** | `Inscrição nº <n> — <candidato>`; o **nº da inscrição** é a chave de reconciliação (busca por nome) |
+| Nº da inscrição + candidato | **Nome do negócio** | `Inscrição nº <n> — <candidato> [LAN:<idlan>]`; o **IDLAN** (token `[LAN:<idlan>]`) é a chave de reconciliação (o nº da inscrição se repete entre PS/séries) |
 | Origem (Social/Orgânico/Pago) | **Fonte** (`deal_source`) | auto-criada pelo nome; ver §7.8 |
 | Processo seletivo + série | **Campanha** (`campaign`) | texto livre, ex.: `Fund. I 2027 — 1º ano` |
 | Valor da taxa | **Valor único** (`amount_unique`) | preenchido pela taxa lançada como **produto** (recorrência única) |
@@ -390,12 +390,12 @@ padrão** do deal. O mapeamento é:
 - **Responsável financeiro distinto** e seu **nome**: entra como **2º contato** do deal
   (`… (responsável financeiro)`).
 
-> **Reconciliação de pagamento sem custom field:** como não há mais o campo `IDLAN`, a
-> baixa da taxa passa a casar pelo **número da inscrição** que já vai no **nome do
-> negócio**. O job de conciliação (FLAN pago no RM) mapeia `IDLAN → nº da inscrição` e
-> localiza o deal via **busca por nome** (`GET /deals?name=Inscrição nº <n>`), movendo-o
-> para a etapa "Taxa paga". É a base do Passo de atualização de pagamento (ainda não
-> implementado).
+> **Reconciliação de pagamento por IDLAN (sem custom field):** o `NUMEROINSCRICAO`
+> **não é único** (repete entre PS/séries), então a chave de reconciliação é o **IDLAN**
+> do título financeiro, embutido no **nome do negócio** como token `[LAN:<idlan>]`. O job
+> de conciliação (FLAN pago no RM) lista as negociações do funil, indexa por IDLAN
+> (parseando o token) e move o deal casado para a etapa "Taxa paga". O `IDLAN` é único,
+> eliminando a ambiguidade da busca por nome.
 
 **O que o sistema já faz:** ao gerar a taxa de inscrição (`boleto-gerado`), o BFF
 cria de forma **não-bloqueante** uma **negociação** (`POST /api/v1/deals?token=...`):
@@ -586,13 +586,15 @@ RD: mover o deal para *Taxa paga* e disparar o evento `pagamento-confirmado` no 
 
 1. **Detecção (RM/SQL):** [listarInscricoesPagasParaConciliar](../plataforma/lib/totvs/queries.ts)
    seleciona as inscrições do ciclo (filtro por ano no nome do PS) cuja taxa está **paga** —
-   `FLAN.STATUSLAN = 1` (com `DATABAIXA`) — e traz o contato do responsável pela inscrição
-   (`SPSUSUARIOTIPORELAC` TIPORELAC=5) para o evento de Marketing.
-2. **Localizar o deal no CRM (por nome — opção B, sem tabela de controle):**
-   [buscarNegociacaoPorNumeroInscricao](../plataforma/lib/marketing/rdcrm.ts) faz
-   *List deals* (`GET /deals?name=Inscrição nº N`) e casa pela **fronteira exata** do
-   número (evita "nº 1" casar com "nº 12"). Não precisa do `deal_id` guardado nem de
-   custom field `IDLAN` (removidos na decisão de campos padrão — §7.6).
+   `FLAN.STATUSLAN = 1` (com `DATABAIXA`) — e traz o **IDLAN** do título (chave única) e o
+   contato do responsável pela inscrição (`SPSUSUARIOTIPORELAC` TIPORELAC=5) para o evento
+   de Marketing.
+2. **Localizar o deal no CRM (por IDLAN — opção B, sem tabela de controle):**
+   [listarNegociacoesDoFunil](../plataforma/lib/marketing/rdcrm.ts) lista as negociações do
+   funil (paginado, `RD_CRM_DEAL_PIPELINE_ID`) e o job as indexa por **IDLAN**, extraído do
+   token `[LAN:<idlan>]` no nome (`extrairIdLanDoNome`). O IDLAN é **único** (o
+   `NUMEROINSCRICAO` se repete entre PS/séries), então não há ambiguidade. Não precisa do
+   `deal_id` guardado nem de custom field.
 3. **Atualizar:** [moverNegociacaoParaEtapa](../plataforma/lib/marketing/rdcrm.ts) faz
    *Update deal* (PUT) → move para `RD_CRM_DEAL_STAGE_PAGO_ID`; em seguida, Marketing →
    conversão `pagamento-confirmado` (dedup por e-mail), só após mover o deal.
@@ -615,25 +617,38 @@ Resposta JSON: `{ ok, verificadas, movidas, jaAvancadas, semDeal, falhas }`.
 **Env necessárias:** `RD_CRM_TOKEN`, `RD_CRM_DEAL_STAGE_PAGO_ID` (etapa destino),
 `RD_CRM_DEAL_STAGE_ID` (etapa *Inscrito*, referência de idempotência) e `CRON_SECRET`.
 
-### 11.1 Checklist de retomada (o que já está pronto e o que falta decidir)
+**Modo simulação (`?dry=1`):** faz a detecção e a busca dos deals mas **não** move no CRM
+nem dispara Marketing; retorna também `moveriam: number[]` (números que seriam avançados).
+Útil para validar em produção sem efeitos colaterais.
 
-Estado em 2026-07-03, para retomar a tarefa sem perder contexto:
+### 11.1 Implantação em produção (feito em 2026-07-06)
 
-- [x] `inscricao-iniciada` e `boleto-gerado` (Marketing) ativos, com contexto enriquecido.
-- [x] `boleto-gerado` envia `cf_course_of_interest` (campo **padrão** da conta — §7.2).
-- [x] `registrarNegociacaoInscricao()` cria o deal no CRM a cada `boleto-gerado`.
-- [x] Plano de funil (MKT) + pipeline (CRM), backfill e job de pagamento documentados (§9–§11).
-- [ ] **Decisão A×B (job de pagamento):** tabela de controle `CSA_RD_CRM_SYNC` (robusto,
-      exige **criar tabela em produção**) **ou** busca por nome/`IDLAN` sem DB (§11).
-- [ ] **Fornecer** `RD_CRM_DEAL_STAGE_PAGO_ID` (ID da etapa "Taxa paga" — GET `/deal_stages`).
-- [ ] **Confirmar/fornecer** tokens (`RD_STATION_TOKEN`, `RD_CRM_TOKEN`) e UUIDs `RD_CRM_CF_*`.
-- [ ] **Criar** `scripts/backfill-rd.mjs` (`--dry-run` por padrão). Lembrar: a API **não data
-      eventos** → datas no RD ficam "hoje"; data original vai em `cf_data_inscricao_original`.
-- [ ] **Criar** `scripts/conciliar-pagamentos.mjs` (+ rota opcional protegida por
-      `CRON_SECRET`) e agendar 2×/dia no Agendador de Tarefas do Windows (VM).
+A execução roda na **VM Linux `csa-portal01`** (não é Windows) via **cron do sistema**:
 
-> Nada acima escreve em produção sem confirmação explícita: os scripts nascem em
-> `--dry-run` e as rotas/jobs só rodam com os tokens e o `RD_CRM_DEAL_STAGE_PAGO_ID` definidos.
+- **Arquivo:** `/etc/cron.d/csa-conciliar` — agenda **08h e 18h** (`0 8,18 * * *`, usuário
+  `root`). O cron lê o `CRON_SECRET` do `.env` em tempo de execução (não embute o segredo)
+  e faz o `curl` para a rota local; saída em **`/var/log/csa-conciliar.log`**.
+
+  ```cron
+  0 8,18 * * * root SECRET="$(sed -n 's/^CRON_SECRET=//p' /etc/csa-portal/.env | head -1)"; \
+    curl -fsS -X POST -H "x-cron-secret: $SECRET" \
+    http://127.0.0.1:3000/api/jobs/conciliar-pagamentos >> /var/log/csa-conciliar.log 2>&1
+  ```
+
+- **`/etc/csa-portal/.env` (produção)** recebeu `RD_CRM_DEAL_STAGE_ID`,
+  `RD_CRM_DEAL_STAGE_PAGO_ID` e `CRON_SECRET` (segredo gerado **na própria VM** com
+  `openssl rand -hex 24` — nunca trafegou fora dela). `RD_CRM_TOKEN` já existia.
+- **Etapas (funil "Admissão 2027", id `6a4bb56342e296001faf851f`):** Inscrito
+  `6a4bb5634eabe9001d666600` (`RD_CRM_DEAL_STAGE_ID`) → Taxa paga
+  `6a4bb564aa4cb20022b93a3c` (`RD_CRM_DEAL_STAGE_PAGO_ID`).
+- **Provisionamento** feito por script idempotente (`scp` → `bash` na VM), que ajusta o
+  `.env`, gera o `CRON_SECRET` se ausente, reinicia o serviço e instala o cron.
+- **Teste em produção (2026-07-06):** 1ª execução real `movidas=31/31, falhas=0`; 2ª
+  execução `movidas=0, jaAvancadas=31` (idempotência); requisição sem `x-cron-secret` → `401`.
+
+> Os scripts de diagnóstico/adhoc (`plataforma/scripts/rdcrm-*.mjs`) rodam com
+> `node --env-file=.env.local` e usam apenas `RD_CRM_TOKEN` (somente leitura, salvo quando
+> explicitamente executam escrita confirmada).
 
 ---
 

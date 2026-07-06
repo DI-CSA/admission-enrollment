@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { timingSafeEqual } from "node:crypto";
 import { listarInscricoesPagasParaConciliar } from "@/lib/totvs/queries";
 import {
-  buscarNegociacaoPorNumeroInscricao,
+  listarNegociacoesDoFunil,
   moverNegociacaoParaEtapa,
 } from "@/lib/marketing/rdcrm";
 import { registrarEventoFunil } from "@/lib/marketing/rdstation";
@@ -10,10 +10,12 @@ import { registrarEventoFunil } from "@/lib/marketing/rdstation";
 // Job de CONCILIAÇÃO DE PAGAMENTO (chamado por cron, NÃO pelo navegador).
 //
 // Fluxo: busca no RM as inscrições do ciclo com a taxa PAGA (FLAN.STATUSLAN=1),
-// localiza a negociação correspondente no RD Station CRM pelo NOME
-// ("Inscrição nº N") e a AVANÇA para a etapa "Taxa paga" — e só então dispara
-// o evento de Marketing "pagamento-confirmado". Idempotente: só avança quem
-// ainda está em "Inscrito" (nunca regride quem já passou dessa etapa).
+// localiza a negociação correspondente no RD Station CRM pela CHAVE ÚNICA
+// (IDLAN do título, embutido no nome como `[LAN:<idlan>]`) e a AVANÇA para a
+// etapa "Taxa paga" — e só então dispara o evento de Marketing
+// "pagamento-confirmado". Usa o IDLAN (e não o NUMEROINSCRICAO, que se repete
+// entre PS/séries) para evitar ambiguidade. Idempotente: só avança quem ainda
+// está em "Inscrito" (nunca regride quem já passou dessa etapa).
 //
 // Proteção: exige o cabeçalho `x-cron-secret` igual a CRON_SECRET (comparação
 // em tempo constante). Sem CRON_SECRET configurado, a rota fica desabilitada.
@@ -65,14 +67,27 @@ export async function POST(req: NextRequest) {
 
   const pagas = await listarInscricoesPagasParaConciliar();
 
+  // Lista as negociações do funil uma vez e indexa por IDLAN (chave única).
+  const negociacoes = await listarNegociacoesDoFunil();
+  const porIdLan = new Map<string, (typeof negociacoes)[number]>();
+  for (const n of negociacoes) {
+    if (n.idLan) porIdLan.set(n.idLan, n);
+  }
+
   let movidas = 0;
   let semDeal = 0;
+  let semIdLan = 0;
   let jaAvancadas = 0;
   let falhas = 0;
   const moveriam: number[] = [];
 
   for (const insc of pagas) {
-    const deal = await buscarNegociacaoPorNumeroInscricao(insc.numeroInscricao);
+    // Sem IDLAN no RM não há como reconciliar pela chave única.
+    if (insc.idLan == null) {
+      semIdLan++;
+      continue;
+    }
+    const deal = porIdLan.get(String(insc.idLan));
     if (!deal) {
       semDeal++;
       continue;
@@ -131,6 +146,7 @@ export async function POST(req: NextRequest) {
     movidas,
     jaAvancadas,
     semDeal,
+    semIdLan,
     falhas,
     ...(dryRun ? { moveriam } : {}),
   });

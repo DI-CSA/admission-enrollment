@@ -881,6 +881,8 @@ export interface InscricaoPagaConciliar {
   numeroInscricao: number;
   idps: number;
   codColigada: number;
+  /** IDLAN do título financeiro da taxa — CHAVE de reconciliação (única). */
+  idLan: number | null;
   nomeCandidato: string | null;
   /** Data da baixa do título (ISO) — quando a taxa foi paga. */
   dataPagamento: string | null;
@@ -893,6 +895,7 @@ interface InscricaoPagaRow {
   NUMEROINSCRICAO: number;
   IDPS: number;
   CODCOLIGADA: number;
+  IDLAN: number | null;
   NOMECANDIDATO: string | null;
   DATABAIXA: Date | string | null;
   EMAILRESP: string | null;
@@ -915,6 +918,7 @@ export async function listarInscricoesPagasParaConciliar(): Promise<
   const rows = await query<InscricaoPagaRow>(
     `
 SELECT i.NUMEROINSCRICAO, i.IDPS, i.CODCOLIGADA,
+       i.IDLAN,
        u.NOME AS NOMECANDIDATO,
        fl.DATABAIXA,
        resp.NOME AS NOMERESP,
@@ -943,6 +947,7 @@ SELECT i.NUMEROINSCRICAO, i.IDPS, i.CODCOLIGADA,
     numeroInscricao: r.NUMEROINSCRICAO,
     idps: r.IDPS,
     codColigada: r.CODCOLIGADA,
+    idLan: r.IDLAN ?? null,
     nomeCandidato: r.NOMECANDIDATO?.trim() ?? null,
     dataPagamento: dataParaIso(r.DATABAIXA),
     emailResponsavel: r.EMAILRESP?.trim() || null,

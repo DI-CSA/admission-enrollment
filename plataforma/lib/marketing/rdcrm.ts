@@ -71,6 +71,23 @@ function numero(v: unknown): number | undefined {
 }
 
 /**
+ * Token de reconciliação embutido no NOME da negociação: `[LAN:<idlan>]`.
+ * O IDLAN do título financeiro é Único no RM (diferente do NUMEROINSCRICAO, que
+ * se repete entre PS/séries), por isso serve de CHAVE de reconciliação. O `]`
+ * final delimita o token, evitando ambiguidade de fronteira (`[LAN:12]` não
+ * casa dentro de `[LAN:123]`).
+ */
+export function tokenIdLan(idLan: number | string): string {
+  return `[LAN:${String(idLan).trim()}]`;
+}
+
+/** Extrai o IDLAN do token `[LAN:<idlan>]` presente no nome; null se ausente. */
+export function extrairIdLanDoNome(nome: string): string | null {
+  const m = /\[LAN:(\d+)\]/.exec(nome);
+  return m ? m[1] : null;
+}
+
+/**
  * Registra a negociação da inscrição no RD Station CRM. Nunca lança exceção: em
  * qualquer falha apenas registra log. Chamar do BFF após a taxa ser gerada.
  */
@@ -79,11 +96,17 @@ export async function registrarNegociacaoInscricao(
 ): Promise<void> {
   const token = process.env.RD_CRM_TOKEN;
 
-  const nomeNegociacao = neg.numeroInscricao
+  const baseNome = neg.numeroInscricao
     ? `Inscrição nº ${neg.numeroInscricao}${
         neg.nomeCandidato ? ` — ${neg.nomeCandidato}` : ""
       }`
     : `Inscrição${neg.nomeCandidato ? ` — ${neg.nomeCandidato}` : ""}`;
+  // Embute o token de reconciliação `[LAN:<idlan>]` no nome (chave única). O job
+  // de conciliação localiza a negociação por ele, sem depender do NUMEROINSCRICAO.
+  const nomeNegociacao =
+    neg.idLan != null && String(neg.idLan).trim() !== ""
+      ? `${baseNome} ${tokenIdLan(neg.idLan)}`
+      : baseNome;
 
   if (!token) {
     console.info("[rdcrm] (stub — RD_CRM_TOKEN ausente):", nomeNegociacao);
@@ -243,6 +266,8 @@ export interface NegociacaoCrm {
   /** Id da etapa (funil) atual da negociação. */
   dealStageId: string | null;
   dealStageName: string | null;
+  /** IDLAN extraído do token `[LAN:<idlan>]` no nome; null se ausente. */
+  idLan: string | null;
 }
 
 /** Extrai o id da etapa de um objeto `deal_stage` (a API varia entre id/_id). */
@@ -296,6 +321,7 @@ export async function buscarNegociacaoPorNumeroInscricao(
       nome: typeof alvo.name === "string" ? alvo.name : base,
       dealStageId: extrairStageId(alvo.deal_stage),
       dealStageName: extrairStageName(alvo.deal_stage),
+      idLan: extrairIdLanDoNome(typeof alvo.name === "string" ? alvo.name : ""),
     };
   } catch (e) {
     console.warn("[rdcrm] falha ao buscar negociação:", base, e);
@@ -311,6 +337,58 @@ function extrairListaDeals(body: unknown): Array<Record<string, unknown>> {
     if (Array.isArray(d)) return d as Array<Record<string, unknown>>;
   }
   return [];
+}
+
+/**
+ * Lista TODAS as negociações do funil (paginado), já com o IDLAN extraído do
+ * token `[LAN:<idlan>]` no nome. O job de conciliação usa isto para montar um
+ * mapa IDLAN → negociação e casar cada inscrição paga pela CHAVE ÚNICA (IDLAN),
+ * sem a ambiguidade do NUMEROINSCRICAO. Filtra pelo funil quando
+ * `RD_CRM_DEAL_PIPELINE_ID` está configurado (senão lista todos os funis, e o
+ * token no nome garante que só as nossas negociações entrem no mapa).
+ * Nunca lança: em falha retorna o que já coletou (o cron re-executa depois).
+ */
+export async function listarNegociacoesDoFunil(): Promise<NegociacaoCrm[]> {
+  const token = process.env.RD_CRM_TOKEN;
+  if (!token) return [];
+  const pipeline = process.env.RD_CRM_DEAL_PIPELINE_ID?.trim();
+  const out: NegociacaoCrm[] = [];
+  for (let page = 1; page <= 100; page++) {
+    let body: unknown;
+    try {
+      const res = await fetch(
+        `${RD_CRM_BASE}/deals?token=${encodeURIComponent(token)}&limit=200&page=${page}` +
+          (pipeline ? `&deal_pipeline_id=${encodeURIComponent(pipeline)}` : ""),
+        { method: "GET", headers: { Accept: "application/json" } },
+      );
+      if (!res.ok) {
+        console.warn("[rdcrm] listar funil não-OK:", res.status, "page", page);
+        break;
+      }
+      body = await res.json();
+    } catch (e) {
+      console.warn("[rdcrm] falha ao listar funil (page", page, "):", e);
+      break;
+    }
+    const lista = extrairListaDeals(body);
+    if (lista.length === 0) break;
+    for (const d of lista) {
+      const nome = typeof d?.name === "string" ? d.name : "";
+      out.push({
+        id: String(d.id ?? d._id ?? ""),
+        nome,
+        dealStageId: extrairStageId(d.deal_stage),
+        dealStageName: extrairStageName(d.deal_stage),
+        idLan: extrairIdLanDoNome(nome),
+      });
+    }
+    const hasMore =
+      typeof (body as { has_more?: unknown })?.has_more === "boolean"
+        ? (body as { has_more: boolean }).has_more
+        : lista.length === 200;
+    if (!hasMore) break;
+  }
+  return out;
 }
 
 /**
