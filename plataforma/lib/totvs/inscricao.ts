@@ -92,10 +92,16 @@ export interface SpsInscAreaOfertaCompl {
   PF: SN1; // pai falecido?
   PM: SN1; // pai mora com o candidato?
   NECESSIDADEESPECIAL: SN1; // necessita atenção especial?
-  // Irmão gemelar (IG="1"): nome e CPF do irmão. Por decisão de negócio o CPF
-  // é gravado JUNTO do nome neste campo NOME(100) — o campo MATRICULA da tabela
-  // é varchar(10) e não comporta um CPF (11 dígitos). Fica null quando IG="2".
+  // NOME(100): nome do irmão. Reutilizado por dois cenários (o candidato não é
+  // os dois ao mesmo tempo):
+  //  - GRUPO="GRP1A" (irmão de aluno matriculado): nome do irmão matriculado;
+  //  - IG="1" (irmão gêmeo inscrito): "<nome> (CPF <cpf>)" — o CPF vai junto do
+  //    nome porque MATRICULA é varchar(10) e não comporta um CPF (11 dígitos).
+  // Fica null quando não há irmão a informar.
   NOME?: string | null;
+  // MATRICULA(10): número de matrícula do irmão já matriculado (GRUPO="GRP1A").
+  // Null nos demais grupos. Confirmado em produção (PS anteriores gravam aqui).
+  MATRICULA?: string | null;
 }
 
 /** Sim/Não complementar: "1"=Sim, "2"=Não. */
@@ -248,6 +254,10 @@ export interface DadosComplementares {
   irmaoNome?: string | null;
   /** CPF do irmão gemelar (só quando irmaoGemeo="1"); gravado junto do nome. */
   irmaoCpf?: string | null;
+  /** Nome do irmão já matriculado (só quando grupo="GRP1A"); grava em NOME. */
+  irmaoMatriculadoNome?: string | null;
+  /** Matrícula do irmão já matriculado (só quando grupo="GRP1A"); grava em MATRICULA. */
+  irmaoMatricula?: string | null;
 }
 
 /**
@@ -433,6 +443,17 @@ export function montarModeloNovaInscricao(
     return `${nome.slice(0, Math.max(0, limiteNome))}${sufixo}`;
   })();
 
+  // Irmão de aluno matriculado (GRUPO="GRP1A"): grava o nome do irmão em NOME(100)
+  // e o número de matrícula em MATRICULA(10). Tem prioridade sobre o gemelar no
+  // campo NOME (o candidato não é os dois cenários ao mesmo tempo).
+  const ehGrupoIrmaoMatriculado = complementares.grupo === "GRP1A";
+  const nomeIrmaoMatriculado = ehGrupoIrmaoMatriculado
+    ? (complementares.irmaoMatriculadoNome ?? "").trim().slice(0, 100) || null
+    : null;
+  const matriculaIrmao = ehGrupoIrmaoMatriculado
+    ? (complementares.irmaoMatricula ?? "").trim().slice(0, 10) || null
+    : null;
+
   const complemento: SpsInscAreaOfertaCompl = {
     CODCOLIGADA: ctx.codColigada,
     IDPS: ctx.idps,
@@ -445,7 +466,8 @@ export function montarModeloNovaInscricao(
     PF: complementares.paiFalecido,
     PM: complementares.paiMora,
     NECESSIDADEESPECIAL: complementares.necessidadeEspecial,
-    NOME: nomeIrmaoGemelar,
+    NOME: nomeIrmaoMatriculado ?? nomeIrmaoGemelar,
+    MATRICULA: matriculaIrmao,
   };
 
   const usuarioCandidato: SpsUsuario = {

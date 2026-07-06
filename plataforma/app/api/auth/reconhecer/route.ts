@@ -5,8 +5,6 @@ import {
   reconhecerResponsavelPorCpf,
   cpfTemContaPortalAluno,
 } from "@/lib/totvs/queries";
-import { registrarEventoFunil } from "@/lib/marketing/rdstation";
-import { extrairOrigem } from "@/lib/marketing/origem";
 
 // BFF — reconhecimento do responsável pelo CPF (gate de login).
 // Segurança: a rota revela se existe cadastro a partir de um CPF, então
@@ -56,23 +54,6 @@ export async function POST(req: NextRequest) {
       reconhecerResponsavelPorCpf(cpf),
       cpfTemContaPortalAluno(cpf),
     ]);
-
-    // Evento de funil (topo do fluxo nativo). Só para reconhecidos, onde já há
-    // relação/base legal e e-mail real. Server-side e não-bloqueante: o e-mail
-    // completo é usado apenas aqui e nunca é devolvido ao cliente.
-    if (r.existe && r.email) {
-      const origem = extrairOrigem(req);
-      void registrarEventoFunil({
-        etapa: "inscricao-iniciada",
-        email: r.email,
-        nome: r.nome,
-        clientTrackingId: origem.clientTrackingId,
-        trafficSource: origem.trafficSource,
-        trafficMedium: origem.trafficMedium,
-        trafficCampaign: origem.trafficCampaign,
-        camposExtras: { cf_responsavel_reconhecido: "true" },
-      });
-    }
 
     // Resposta intencionalmente enxuta e mascarada.
     // `ehResponsavelDeAluno` (ANTIGO) = tem conta no Portal do Aluno (GUSUARIO) e

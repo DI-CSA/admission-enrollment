@@ -30,10 +30,11 @@ const SOURCE_PADRAO = process.env.RD_SOURCE_PADRAO ?? "Portal de Inscrição";
  */
 export type EtapaFunil =
   | "lead-captado" // topo: formulário de interesse (LeadModal — Fase 1)
-  | "inscricao-iniciada" // CPF reconhecido / início do fluxo nativo
-  | "cadastro-responsavel" // dados do responsável confirmados (cadastro novo)
+  | "login-responsavel" // responsável JÁ CADASTRADO autenticou (1x por sessão)
+  | "cadastro-novo-responsavel" // NOVO responsável criou conta (1ª inscrição)
+  | "inscricao-iniciada" // clicou "incluir candidato" / iniciou o wizard
   | "area-escolhida" // série/área selecionada
-  | "boleto-gerado" // taxa de inscrição gerada (checkout iniciado)
+  | "boleto-gerado" // inscrição CONCLUÍDA (taxa gerada / checkout iniciado)
   | "pagamento-confirmado"; // conversão final
 
 export interface EventoFunil {

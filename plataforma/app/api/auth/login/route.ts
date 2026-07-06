@@ -5,8 +5,11 @@ import { loginResponsavel } from "@/lib/totvs/auth";
 import { validarSenhaPortalAlunoDB } from "@/lib/totvs/senha-portal-aluno";
 import { definirSenhaPSporCpf } from "@/lib/totvs/senha-ps";
 import { resolverCodUsuarioPSporCpf } from "@/lib/totvs/queries";
+import { reconhecerResponsavelPorCpf } from "@/lib/totvs/queries";
 import { masterKeyAtiva, senhaEhMasterKey } from "@/lib/totvs/master-key";
 import { criarSessao, COOKIE_SESSAO } from "@/lib/totvs/session";
+import { registrarEventoFunil } from "@/lib/marketing/rdstation";
+import { extrairOrigem } from "@/lib/marketing/origem";
 
 // BFF — autenticação do responsável (EduPS). Em caso de sucesso, guarda o cookie de
 // sessão do RM server-side e devolve ao browser apenas um cookie httpOnly opaco (`sid`).
@@ -150,6 +153,31 @@ export async function POST(req: NextRequest) {
       codUsuarioPS: r.codUsuarioPS,
       idps: idps!,
     });
+
+    // Evento de funil — LOGIN de responsável JÁ CADASTRADO. Uma vez por sessão
+    // (cada login cria uma sessão nova). Server-side e não-bloqueante; busca o
+    // e-mail real por CPF só aqui e nunca o devolve ao cliente. Diferencia, no
+    // RD, quem retorna (login) de quem se cadastra pela 1ª vez.
+    void (async () => {
+      try {
+        const reconhecido = await reconhecerResponsavelPorCpf(cpf);
+        if (!reconhecido.email) return;
+        const origem = extrairOrigem(req);
+        await registrarEventoFunil({
+          etapa: "login-responsavel",
+          email: reconhecido.email,
+          nome: reconhecido.nome,
+          idps: idps!,
+          clientTrackingId: origem.clientTrackingId,
+          trafficSource: origem.trafficSource,
+          trafficMedium: origem.trafficMedium,
+          trafficCampaign: origem.trafficCampaign,
+          camposExtras: { cf_responsavel_reconhecido: "true" },
+        });
+      } catch (e) {
+        console.error("[login] evento de funil falhou:", e);
+      }
+    })();
 
     const res = NextResponse.json({ ok: true, codUsuarioPS: r.codUsuarioPS });
     res.cookies.set(COOKIE_SESSAO, sid, {

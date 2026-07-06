@@ -994,6 +994,12 @@ export function PainelResponsavel({
         type="button"
         onClick={() => {
           setErro(null);
+          // Evento de funil (RD): responsável iniciou uma inscrição. Best-effort,
+          // não-bloqueante; o servidor resolve o e-mail pela sessão.
+          void fetch("/api/marketing/inscricao-iniciada", {
+            method: "POST",
+            keepalive: true,
+          }).catch(() => {});
           setInscrevendo(true);
         }}
         className={botaoPrimario}

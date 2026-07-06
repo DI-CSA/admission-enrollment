@@ -279,6 +279,10 @@ export function WizardInscricao({
   // de negócio o CPF é gravado junto do nome no campo NOME da API.
   const [irmaoNome, setIrmaoNome] = useState("");
   const [irmaoCpf, setIrmaoCpf] = useState("");
+  // Irmão de aluno matriculado (só quando grupo="GRP1A"): nome + nº de matrícula
+  // do irmão que já estuda no colégio (gravados em NOME e MATRICULA da API).
+  const [irmaoMatNome, setIrmaoMatNome] = useState("");
+  const [irmaoMatricula, setIrmaoMatricula] = useState("");
 
   // Séries pretendidas (agregadas de todos os PS de admissão do ano). O item
   // selecionado carrega o IDPS de destino da inscrição.
@@ -384,7 +388,10 @@ export function WizardInscricao({
     !!necessidadeEspecial &&
     // Gemelar: exige nome e CPF válido do irmão.
     (irmaoGemeo !== "1" ||
-      (irmaoNome.trim().length > 1 && cpfValido(irmaoCpf)));
+      (irmaoNome.trim().length > 1 && cpfValido(irmaoCpf))) &&
+    // Irmão de aluno matriculado (GRP1A): exige nome e matrícula do irmão.
+    (grupo !== "GRP1A" ||
+      (irmaoMatNome.trim().length > 1 && irmaoMatricula.trim().length > 0));
 
   // Documentos: todos os OBRIGATÓRIOS precisam ter um arquivo anexado.
   const documentosOk = documentosExigidos
@@ -545,6 +552,8 @@ export function WizardInscricao({
         necessidadeEspecial,
         irmaoNome: irmaoGemeo === "1" ? irmaoNome.trim() : null,
         irmaoCpf: irmaoGemeo === "1" ? irmaoCpf : null,
+        irmaoMatriculadoNome: grupo === "GRP1A" ? irmaoMatNome.trim() : null,
+        irmaoMatricula: grupo === "GRP1A" ? irmaoMatricula.trim() : null,
       };
       const res = await fetch("/api/inscricao", {
         method: "POST",
@@ -1045,6 +1054,43 @@ export function WizardInscricao({
             onChange={setNecessidadeEspecial}
           />
         </div>
+
+        {grupo === "GRP1A" && (
+          <div className="space-y-3 rounded-lg border border-black/10 px-4 py-3">
+            <p className="text-sm font-medium text-grafite">
+              Dados do irmão já matriculado
+            </p>
+            <label className="block">
+              <span className={rotuloCampo}>
+                Nome do irmão <span className="text-csa-vermelho">*</span>
+              </span>
+              <input
+                type="text"
+                value={irmaoMatNome}
+                onChange={(e) => setIrmaoMatNome(e.target.value)}
+                className={inputBase}
+              />
+            </label>
+            <label className="block">
+              <span className={rotuloCampo}>
+                Número de matrícula do irmão{" "}
+                <span className="text-csa-vermelho">*</span>
+              </span>
+              <input
+                type="text"
+                inputMode="numeric"
+                value={irmaoMatricula}
+                onChange={(e) =>
+                  setIrmaoMatricula(
+                    e.target.value.replace(/\D/g, "").slice(0, 10),
+                  )
+                }
+                className={inputBase}
+                maxLength={10}
+              />
+            </label>
+          </div>
+        )}
 
         {irmaoGemeo === "1" && (
           <div className="space-y-3 rounded-lg border border-black/10 px-4 py-3">

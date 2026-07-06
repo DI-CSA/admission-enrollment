@@ -219,6 +219,17 @@ function complementaresValidos(
       return false;
     }
   }
+  // Grupo "irmão de aluno matriculado" (GRP1A): exige nome e matrícula do irmão.
+  if (String(c.grupo) === "GRP1A") {
+    if (
+      typeof c.irmaoMatriculadoNome !== "string" ||
+      c.irmaoMatriculadoNome.trim().length < 2 ||
+      typeof c.irmaoMatricula !== "string" ||
+      c.irmaoMatricula.trim().length < 1
+    ) {
+      return false;
+    }
+  }
   return (
     typeof c.colegioAtual === "string" &&
     c.colegioAtual.trim().length > 0 &&
@@ -815,6 +826,24 @@ export async function POST(req: NextRequest) {
           credenciais: { cpf: apenasDigitos(novo!.cpf!), senha: novo!.senha! },
           codUsuarioPS: login.codUsuarioPS,
           idps,
+        });
+      }
+
+      // Evento de funil — NOVO responsável cadastrado (1ª inscrição). Distingue,
+      // no RD, quem se cadastra pela 1ª vez de quem retorna (login-responsavel).
+      // Server-side e não-bloqueante.
+      if (novo!.email) {
+        const origemNovo = extrairOrigem(req);
+        void registrarEventoFunil({
+          etapa: "cadastro-novo-responsavel",
+          email: novo!.email,
+          nome: novo!.nome,
+          telefone: novo!.celular ? apenasDigitos(novo!.celular) : null,
+          idps,
+          clientTrackingId: origemNovo.clientTrackingId,
+          trafficSource: origemNovo.trafficSource,
+          trafficMedium: origemNovo.trafficMedium,
+          trafficCampaign: origemNovo.trafficCampaign,
         });
       }
     }
