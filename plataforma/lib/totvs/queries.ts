@@ -754,6 +754,33 @@ export async function obterResponsavelVerbatim(
   };
 }
 
+/**
+ * Nome VERBATIM já gravado no RM para um CPF (dígitos), quando a pessoa já
+ * existe. Serve para candidato/responsável financeiro "novos" cujo CPF já tem
+ * cadastro: o DataServer do EduPS trata pessoa existente como imutável e aborta
+ * a inscrição ("o campo nome não pode ser alterado") se o NOME divergir — nem
+ * que seja por acento/maiúscula/espaço. Reenviamos então o nome como está.
+ * Havendo mais de um registro para o mesmo CPF, usa o mais recente.
+ * Retorna null se o CPF ainda não existir.
+ */
+export async function obterNomeRmPorCpf(
+  cpf: string,
+): Promise<{ codUsuarioPS: number; nome: string } | null> {
+  const digitos = (cpf || "").replace(/\D/g, "");
+  if (digitos.length !== 11) return null;
+  const rows = await query<{ CODUSUARIOPS: number; NOME: string | null }>(
+    `SELECT TOP 1 CODUSUARIOPS, NOME
+     FROM SPSUSUARIO
+     WHERE CPF = @cpf AND NOME IS NOT NULL AND LTRIM(RTRIM(NOME)) <> ''
+     ORDER BY RECCREATEDON DESC`,
+    { cpf: digitos },
+  );
+  const r = rows[0];
+  const nome = r?.NOME ?? "";
+  if (!r || !nome.trim()) return null;
+  return { codUsuarioPS: r.CODUSUARIOPS, nome };
+}
+
 // ---------------------------------------------------------------------------
 // Elegibilidade à matrícula (candidatos aprovados/em chamada do responsável)
 // ---------------------------------------------------------------------------

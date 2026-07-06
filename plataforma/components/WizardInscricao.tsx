@@ -43,6 +43,7 @@ interface ResultadoInscricao {
   numeroInscricao: number | null;
   mostrarBoleto: boolean;
   ra: string | null;
+  avisos?: string[];
 }
 
 // Lookups do RM (GCONSIST) — série atual do candidato e grupo de candidato.
@@ -635,6 +636,7 @@ export function WizardInscricao({
             numeroInscricao: number | null;
             mostrarBoleto: boolean;
             ra: string | null;
+            avisos?: string[];
           }
         | { ok: false; erro: string; mensagem?: string };
 
@@ -1588,6 +1590,17 @@ export function WizardInscricao({
           </p>
         )}
       </div>
+
+      {resultado?.avisos && resultado.avisos.length > 0 && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <p className="font-semibold">Atenção</p>
+          <ul className="mt-1 list-disc space-y-1 pl-5">
+            {resultado.avisos.map((a, i) => (
+              <li key={i}>{a}</li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {resultado?.numeroInscricao && (
         <div className="space-y-2 rounded-lg border border-black/10 px-4 py-3 text-sm">

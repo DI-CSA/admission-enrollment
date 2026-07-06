@@ -5,6 +5,7 @@ import { apenasDigitos, cpfValido } from "@/lib/cpf";
 import {
   obterProcessoSeletivo,
   obterResponsavelVerbatim,
+  obterNomeRmPorCpf,
   reconhecerResponsavelPorCpf,
   listarDocumentosExigidos,
 } from "@/lib/totvs/queries";
@@ -39,6 +40,52 @@ export const dynamic = "force-dynamic";
 const COD_COLIGADA = Number(process.env.RM_COD_COLIGADA) || 1;
 const LIMITE = 6;
 const JANELA_MS = 60_000;
+
+/** Normaliza um nome para COMPARAÇÃO (ignora acento, maiúsc./minúsc. e espaços
+ *  repetidos/nas pontas). Serve só para decidir se avisamos o usuário; o nome
+ *  ENVIADO ao RM continua sendo o verbatim gravado. */
+function normalizarNomeParaComparar(s: string): string {
+  return s
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toUpperCase();
+}
+
+/** CPF em 000.000.000-00 (para mensagens de aviso). */
+function formatarCpf(cpf: string): string {
+  const d = (cpf || "").replace(/\D/g, "");
+  if (d.length !== 11) return cpf;
+  return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`;
+}
+
+/**
+ * Reconcilia o nome de uma pessoa que PODE já existir no RM (por CPF). Se
+ * existir, o DataServer trata a pessoa como imutável: enviar um nome diferente
+ * (até por acento/maiúscula/espaço) aborta a inscrição. Então reaproveitamos o
+ * nome VERBATIM do RM. Só geramos aviso ao usuário quando a diferença é VISÍVEL
+ * (após normalizar), para não assustar por divergências invisíveis.
+ */
+async function reconciliarNomePorCpf(
+  cpf: string,
+  nomeDigitado: string,
+  rotulo: string,
+): Promise<{ nome: string; aviso: string | null }> {
+  const registro = await obterNomeRmPorCpf(cpf);
+  if (!registro) return { nome: nomeDigitado, aviso: null };
+  const nomeRm = registro.nome.trim();
+  if (!nomeRm) return { nome: nomeDigitado, aviso: null };
+  const diferencaVisivel =
+    normalizarNomeParaComparar(nomeRm) !==
+    normalizarNomeParaComparar(nomeDigitado);
+  const aviso = diferencaVisivel
+    ? `Já existe um cadastro para o CPF ${formatarCpf(cpf)} (${rotulo}) com o nome "${nomeRm}". ` +
+      `Para não bloquear a inscrição, usamos esse nome. Se estiver incorreto, procure a secretaria.`
+    : null;
+  // Enviamos sempre o nome do RM (verbatim) quando a pessoa já existe.
+  return { nome: nomeRm, aviso };
+}
 
 // Guard de ambiente: enquanto o BFF apontar para a base/WebAPI de PRODUÇÃO, a
 // submissão final (única operação que GRAVA no RM) fica bloqueada. Só liberar
@@ -527,6 +574,22 @@ export async function POST(req: NextRequest) {
       },
     };
 
+    // Avisos não-bloqueantes devolvidos ao wizard (ex.: nome reaproveitado do RM).
+    const avisos: string[] = [];
+
+    // Candidato: se o CPF já existe no RM, o nome é imutável no DataServer.
+    // Reaproveitamos o nome gravado (verbatim) e avisamos se houver diferença
+    // visível em relação ao digitado.
+    {
+      const rec = await reconciliarNomePorCpf(
+        dadosCandidato.cpf ?? "",
+        dadosCandidato.nome,
+        "candidato",
+      );
+      dadosCandidato.nome = rec.nome;
+      if (rec.aviso) avisos.push(rec.aviso);
+    }
+
     // Responsável para o modelo: VERBATIM do RM quando logado (qualquer divergência
     // é tratada como "alteração não permitida"); dados digitados quando NOVO.
     let responsavelModelo: ResponsavelParaModelo;
@@ -574,6 +637,19 @@ export async function POST(req: NextRequest) {
         idPais: dadosCandidato.endereco.idPais || 1,
         relacaoComCandidato: relacaoResp,
       };
+    }
+
+    // Responsável NOVO: mesmo racional do candidato. Se o CPF já existe no RM
+    // (sem senha — senão o guard acima já teria barrado), reaproveita o nome
+    // verbatim para não colidir com a imutabilidade do DataServer.
+    if (!sessao) {
+      const rec = await reconciliarNomePorCpf(
+        responsavelModelo.cpf ?? "",
+        responsavelModelo.nome,
+        "responsável",
+      );
+      responsavelModelo.nome = rec.nome;
+      if (rec.aviso) avisos.push(rec.aviso);
     }
 
     // Pré-checagem de duplicidade (UX). O bloqueio autoritativo é da EduPS.
@@ -666,6 +742,16 @@ export async function POST(req: NextRequest) {
         // Responsável financeiro não carrega grau de parentesco na inscrição.
         relacaoComCandidato: null,
       };
+
+      // Financeiro "outra pessoa": se o CPF já existe no RM, reaproveita o nome
+      // verbatim (imutabilidade do DataServer) e avisa se houver diferença visível.
+      const rec = await reconciliarNomePorCpf(
+        respFinanceiroModelo.cpf ?? "",
+        respFinanceiroModelo.nome,
+        "responsável financeiro",
+      );
+      respFinanceiroModelo.nome = rec.nome;
+      if (rec.aviso) avisos.push(rec.aviso);
     }
 
     const model = montarModeloNovaInscricao(
@@ -854,6 +940,7 @@ export async function POST(req: NextRequest) {
       numeroInscricao: resultado.numeroInscricao,
       mostrarBoleto: resultado.mostrarBoleto,
       ra: resultado.ra,
+      ...(avisos.length ? { avisos } : {}),
       ...(ehNovo ? { logado: sid != null } : {}),
     });
     if (sid) {
