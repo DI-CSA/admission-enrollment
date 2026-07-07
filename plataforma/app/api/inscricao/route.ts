@@ -5,6 +5,7 @@ import { apenasDigitos, cpfValido } from "@/lib/cpf";
 import {
   obterProcessoSeletivo,
   obterResponsavelVerbatim,
+  obterResponsavelVerbatimPorCpf,
   obterNomeRmPorCpf,
   reconhecerResponsavelPorCpf,
   listarDocumentosExigidos,
@@ -707,62 +708,95 @@ export async function POST(req: NextRequest) {
     let respFinanceiroModelo: ResponsavelParaModelo | null = null;
     const rf = body.respFinanceiro;
     if (rf?.outraPessoa) {
-      if (
-        !rf.cpf ||
-        !cpfValido(rf.cpf) ||
-        !rf.nome ||
-        rf.nome.trim().length < 2 ||
-        !dataNascimentoValida(rf.dataNascimento) ||
-        !rf.email ||
-        !/.+@.+\..+/.test(rf.email) ||
-        !rf.celular ||
-        apenasDigitos(rf.celular).length < 10 ||
-        !rf.rua ||
-        !rf.numero ||
-        !rf.bairro ||
-        !rf.cidade ||
-        !rf.estado ||
-        !rf.cep ||
-        apenasDigitos(rf.cep).length !== 8
-      ) {
-        return NextResponse.json(
-          { ok: false, erro: "resp-financeiro-invalido" },
-          { status: 400 },
-        );
-      }
-      respFinanceiroModelo = {
-        codUsuarioPS: null,
-        nome: rf.nome.trim(),
-        sexo: rf.sexo ?? null,
-        dtNascimento: rf.dataNascimento ?? null,
-        cpf: apenasDigitos(rf.cpf),
-        email: rf.email.trim(),
-        // Mesmo racional do responsável: só celular, replicado no residencial
-        // (TELEFONE1) para satisfazer o campo obrigatório do RM.
-        telefone1: apenasDigitos(rf.celular!),
-        telefone2: apenasDigitos(rf.celular!),
-        nacionalidade: rf.nacionalidade ?? "10",
-        rua: rf.rua.trim(),
-        numero: rf.numero.trim(),
-        complemento: rf.complemento?.trim() || null,
-        bairro: rf.bairro.trim(),
-        cidade: rf.cidade.trim(),
-        estado: rf.estado,
-        cep: apenasDigitos(rf.cep),
-        idPais: 1,
-        // Responsável financeiro não carrega grau de parentesco na inscrição.
-        relacaoComCandidato: null,
-      };
+      const cpfRfDigitos = apenasDigitos(rf.cpf ?? "");
+      const cpfRespInscDigitos = apenasDigitos(responsavelModelo.cpf ?? "");
 
-      // Financeiro "outra pessoa": se o CPF já existe no RM, reaproveita o nome
-      // verbatim (imutabilidade do DataServer) e avisa se houver diferença visível.
-      const rec = await reconciliarNomePorCpf(
-        respFinanceiroModelo.cpf ?? "",
-        respFinanceiroModelo.nome,
-        "responsável financeiro",
-      );
-      respFinanceiroModelo.nome = rec.nome;
-      if (rec.aviso) avisos.push(rec.aviso);
+      // Guard: o responsável de inscrição informou o PRÓPRIO CPF em "outra
+      // pessoa". Ele já é o financeiro por padrão (1ª opção "sou eu"); criar um
+      // 3º registro com a mesma pessoa colidiria com o cadastro dela no RM
+      // ("o campo nome não pode ser alterado"). Descartamos os dados repetidos,
+      // mantemos ele como financeiro e avisamos para usar a opção correta.
+      if (cpfRfDigitos && cpfRfDigitos === cpfRespInscDigitos) {
+        avisos.push(
+          `O CPF ${formatarCpf(cpfRfDigitos)} informado como responsável ` +
+            `financeiro em "outra pessoa" é o seu próprio. Mantivemos você ` +
+            `como responsável financeiro (opção "sou eu") e descartamos os ` +
+            `dados duplicados.`,
+        );
+        // respFinanceiroModelo permanece null → o próprio responsável de
+        // inscrição é o financeiro (EHRESPFIN do responsável = "T").
+      } else {
+        if (
+          !rf.cpf ||
+          !cpfValido(rf.cpf) ||
+          !rf.nome ||
+          rf.nome.trim().length < 2 ||
+          !dataNascimentoValida(rf.dataNascimento) ||
+          !rf.email ||
+          !/.+@.+\..+/.test(rf.email) ||
+          !rf.celular ||
+          apenasDigitos(rf.celular).length < 10 ||
+          !rf.rua ||
+          !rf.numero ||
+          !rf.bairro ||
+          !rf.cidade ||
+          !rf.estado ||
+          !rf.cep ||
+          apenasDigitos(rf.cep).length !== 8
+        ) {
+          return NextResponse.json(
+            { ok: false, erro: "resp-financeiro-invalido" },
+            { status: 400 },
+          );
+        }
+
+        // Cobertura completa: o "outra pessoa" pode ser alguém JÁ cadastrado no
+        // RM. Se o CPF existe, reenviamos TODOS os dados VERBATIM (não só o
+        // nome) e referenciamos o CODUSUARIOPS existente — evitando o erro
+        // "o campo nome não pode ser alterado", que dispara quando QUALQUER
+        // campo diverge do gravado (inclusive um simples espaço à direita).
+        const verbatimRf = await obterResponsavelVerbatimPorCpf(cpfRfDigitos);
+        if (verbatimRf) {
+          respFinanceiroModelo = { ...verbatimRf, relacaoComCandidato: null };
+          // Avisa se o nome digitado difere visivelmente do gravado (mantemos o
+          // do RM, que é imutável no DataServer).
+          if (
+            normalizarNomeParaComparar(rf.nome.trim()) !==
+            normalizarNomeParaComparar(verbatimRf.nome)
+          ) {
+            avisos.push(
+              `Encontramos um cadastro para o CPF ${formatarCpf(cpfRfDigitos)} ` +
+                `(responsável financeiro) com o nome "${verbatimRf.nome.trim()}". ` +
+                `Mantivemos o nome já cadastrado.`,
+            );
+          }
+        } else {
+          // Pessoa nova: usa os dados digitados.
+          respFinanceiroModelo = {
+            codUsuarioPS: null,
+            nome: rf.nome.trim(),
+            sexo: rf.sexo ?? null,
+            dtNascimento: rf.dataNascimento ?? null,
+            cpf: apenasDigitos(rf.cpf),
+            email: rf.email.trim(),
+            // Mesmo racional do responsável: só celular, replicado no residencial
+            // (TELEFONE1) para satisfazer o campo obrigatório do RM.
+            telefone1: apenasDigitos(rf.celular!),
+            telefone2: apenasDigitos(rf.celular!),
+            nacionalidade: rf.nacionalidade ?? "10",
+            rua: rf.rua.trim(),
+            numero: rf.numero.trim(),
+            complemento: rf.complemento?.trim() || null,
+            bairro: rf.bairro.trim(),
+            cidade: rf.cidade.trim(),
+            estado: rf.estado,
+            cep: apenasDigitos(rf.cep),
+            idPais: 1,
+            // Responsável financeiro não carrega grau de parentesco na inscrição.
+            relacaoComCandidato: null,
+          };
+        }
+      }
     }
 
     const model = montarModeloNovaInscricao(
@@ -776,24 +810,33 @@ export async function POST(req: NextRequest) {
       documentos,
     );
 
-    // Blindagem da senha do responsável (fluxo logado): o NovaInscricao do RM
-    // REGRAVA SPSUSUARIO.SENHA do responsável mesmo sem enviarmos senha no
-    // payload, corrompendo o login de um usuário de PS que já existe. Capturamos
-    // o envelope atual ANTES e o restauramos DEPOIS, para que inscrever um
-    // candidato nunca altere a senha de quem já depende dela.
-    const cpfRespLogado = sessao
-      ? apenasDigitos(responsavelModelo.cpf ?? "")
-      : "";
-    const envelopeSenhaAntes = sessao
-      ? await lerEnvelopeSenhaPSporCpf(cpfRespLogado)
-      : null;
+    // Blindagem da senha (NovaInscricao REGRAVA SPSUSUARIO.SENHA de usuários já
+    // existentes mesmo sem enviarmos senha no payload, corrompendo o login de
+    // quem já depende dela). Capturamos o envelope atual de CADA usuário
+    // EXISTENTE referenciado ANTES e restauramos DEPOIS. Isso cobre o
+    // responsável de inscrição (logado) e o responsável financeiro "outra
+    // pessoa" quando este já tem cadastro (codUsuarioPS != null). Não blindamos
+    // o CPF do cadastro NOVO: ele define a própria senha logo após.
+    const cpfsBlindar = new Set<string>();
+    if (sessao) cpfsBlindar.add(apenasDigitos(responsavelModelo.cpf ?? ""));
+    if (respFinanceiroModelo?.codUsuarioPS != null) {
+      cpfsBlindar.add(apenasDigitos(respFinanceiroModelo.cpf ?? ""));
+    }
+    cpfsBlindar.delete("");
+    if (ehNovo) cpfsBlindar.delete(apenasDigitos(novo!.cpf ?? ""));
+
+    const envelopesSenhaAntes = new Map<string, string>();
+    for (const cpfBl of cpfsBlindar) {
+      const envelope = await lerEnvelopeSenhaPSporCpf(cpfBl);
+      if (envelope) envelopesSenhaAntes.set(cpfBl, envelope);
+    }
 
     const resultado = await criarInscricao(rmCookie, model);
 
-    if (sessao && envelopeSenhaAntes) {
-      const envelopeSenhaDepois = await lerEnvelopeSenhaPSporCpf(cpfRespLogado);
-      if (envelopeSenhaDepois !== envelopeSenhaAntes) {
-        await restaurarEnvelopeSenhaPSporCpf(cpfRespLogado, envelopeSenhaAntes);
+    for (const [cpfBl, envelopeAntes] of envelopesSenhaAntes) {
+      const envelopeDepois = await lerEnvelopeSenhaPSporCpf(cpfBl);
+      if (envelopeDepois !== envelopeAntes) {
+        await restaurarEnvelopeSenhaPSporCpf(cpfBl, envelopeAntes);
       }
     }
 

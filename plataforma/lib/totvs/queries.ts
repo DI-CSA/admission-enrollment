@@ -660,6 +660,15 @@ export async function candidatoCpfJaInscritoNoProcesso(
 // DataServer trata qualquer campo ausente/divergente como "alteração não
 // permitida" e aborta a inscrição (ex.: usuário do tipo funcionário). Por isso
 // lemos a linha original do SPSUSUARIO e a repassamos verbatim ao modelo.
+//
+// COMPLEMENTO (descoberta jul/2026): "verbatim" tem de ser LITERAL — sem trim.
+// Vários cadastros têm espaços à direita em RUA/NUMERO/BAIRRO (ex.: "PIO CORREIA ").
+// Se aparar esses espaços, o DataServer detecta os campos como ALTERADOS e tenta
+// regravar a PPESSOA (pessoa global), cuja gravação re-valida o NOME. Quando o
+// NOME está bloqueado (pessoa com vínculos/movimentos), a inscrição aborta com
+// "o campo nome não pode ser alterado" — mesmo o nome sendo idêntico. Enviando os
+// campos byte a byte como estão, nada é tido como alterado e a pessoa não é
+// regravada. O NOME é lido da PPESSOA (fonte canônica que o DataServer valida).
 
 export interface ResponsavelVerbatimRM {
   codUsuarioPS: number;
@@ -684,6 +693,8 @@ export interface ResponsavelVerbatimRM {
 
 interface ResponsavelVerbatimRow {
   CODUSUARIOPS: number;
+  /** Nome canônico da pessoa global (PPESSOA) — é o que o DataServer valida. */
+  PPNOME: string | null;
   NOME: string | null;
   SEXO: string | null;
   DTNASCIMENTO: Date | null;
@@ -716,6 +727,40 @@ function dataIso(d: Date | null): string | null {
 const str = (v: string | null | undefined) =>
   v == null ? null : String(v).trim() || null;
 
+// Colunas VERBATIM comuns às buscas por CODUSUARIOPS e por CPF. Mantemos o
+// SELECT idêntico nas duas para que o mapeamento (mapVerbatim) seja o mesmo.
+const COLUNAS_VERBATIM = `u.CODUSUARIOPS, p.NOME AS PPNOME, u.NOME, u.SEXO,
+       u.DTNASCIMENTO, u.CPF, u.EMAIL, u.TELEFONE1, u.TELEFONE2, u.NACIONALIDADE,
+       u.RUA, u.NUMERO, u.COMPLEMENTO, u.BAIRRO, u.CIDADE, u.ESTADO, u.CEP, u.IDPAIS`;
+
+/** Mapeia uma linha SPSUSUARIO+PPESSOA em ResponsavelVerbatimRM. VERBATIM literal:
+ *  preserva o valor exatamente como está no banco (inclusive espaços à direita).
+ *  Só normaliza undefined -> null. NUNCA fazer trim aqui. */
+function mapVerbatim(r: ResponsavelVerbatimRow): ResponsavelVerbatimRM {
+  const raw = (v: string | null | undefined) => (v == null ? null : String(v));
+  return {
+    codUsuarioPS: r.CODUSUARIOPS,
+    // Nome canônico da PPESSOA (o que o DataServer valida). Cai para o do
+    // SPSUSUARIO se o usuário ainda não estiver vinculado a uma pessoa global.
+    nome: raw(r.PPNOME) ?? raw(r.NOME) ?? "",
+    sexo: raw(r.SEXO),
+    dtNascimento: dataIso(r.DTNASCIMENTO),
+    cpf: raw(r.CPF),
+    email: raw(r.EMAIL),
+    telefone1: raw(r.TELEFONE1),
+    telefone2: raw(r.TELEFONE2),
+    nacionalidade: raw(r.NACIONALIDADE),
+    rua: raw(r.RUA),
+    numero: raw(r.NUMERO),
+    complemento: raw(r.COMPLEMENTO),
+    bairro: raw(r.BAIRRO),
+    cidade: raw(r.CIDADE),
+    estado: raw(r.ESTADO),
+    cep: raw(r.CEP),
+    idPais: r.IDPAIS ?? null,
+  };
+}
+
 /**
  * Lê o responsável (SPSUSUARIO) por CODUSUARIOPS para reenvio VERBATIM na
  * NovaInscricao. Retorna null se não existir.
@@ -724,34 +769,42 @@ export async function obterResponsavelVerbatim(
   codUsuarioPS: number,
 ): Promise<ResponsavelVerbatimRM | null> {
   const rows = await query<ResponsavelVerbatimRow>(
-    `SELECT TOP 1 CODUSUARIOPS, NOME, SEXO, DTNASCIMENTO, CPF, EMAIL,
-            TELEFONE1, TELEFONE2, NACIONALIDADE, RUA, NUMERO, COMPLEMENTO,
-            BAIRRO, CIDADE, ESTADO, CEP, IDPAIS
-     FROM SPSUSUARIO
-     WHERE CODUSUARIOPS = @cod`,
+    `SELECT TOP 1 ${COLUNAS_VERBATIM}
+     FROM SPSUSUARIO u
+     LEFT JOIN PPESSOA p ON p.CODIGO = u.CODPESSOA
+     WHERE u.CODUSUARIOPS = @cod`,
     { cod: codUsuarioPS },
   );
   const r = rows[0];
   if (!r) return null;
-  return {
-    codUsuarioPS: r.CODUSUARIOPS,
-    nome: str(r.NOME) ?? "",
-    sexo: str(r.SEXO),
-    dtNascimento: dataIso(r.DTNASCIMENTO),
-    cpf: str(r.CPF),
-    email: str(r.EMAIL),
-    telefone1: str(r.TELEFONE1),
-    telefone2: str(r.TELEFONE2),
-    nacionalidade: str(r.NACIONALIDADE),
-    rua: str(r.RUA),
-    numero: str(r.NUMERO),
-    complemento: str(r.COMPLEMENTO),
-    bairro: str(r.BAIRRO),
-    cidade: str(r.CIDADE),
-    estado: str(r.ESTADO),
-    cep: str(r.CEP),
-    idPais: r.IDPAIS ?? null,
-  };
+  return mapVerbatim(r);
+}
+
+/**
+ * Igual a `obterResponsavelVerbatim`, mas localiza a pessoa pelo CPF (dígitos).
+ * Serve para o responsável FINANCEIRO "outra pessoa" cujo CPF JÁ existe no RM:
+ * reenvia TODOS os dados VERBATIM (não só o nome) e referencia o CODUSUARIOPS
+ * existente, evitando o erro "o campo nome não pode ser alterado" — que dispara
+ * quando QUALQUER campo da pessoa diverge do gravado (inclusive espaço à direita).
+ * Usa o registro mais recente. Retorna null se o CPF ainda não existir.
+ */
+export async function obterResponsavelVerbatimPorCpf(
+  cpf: string,
+): Promise<ResponsavelVerbatimRM | null> {
+  const digitos = (cpf || "").replace(/\D/g, "");
+  if (digitos.length !== 11) return null;
+  const rows = await query<ResponsavelVerbatimRow>(
+    `SELECT TOP 1 ${COLUNAS_VERBATIM}
+     FROM SPSUSUARIO u
+     LEFT JOIN PPESSOA p ON p.CODIGO = u.CODPESSOA
+     WHERE REPLACE(REPLACE(REPLACE(u.CPF,'.',''),'-',''),' ','') = @cpf
+       AND u.NOME IS NOT NULL AND LTRIM(RTRIM(u.NOME)) <> ''
+     ORDER BY u.RECCREATEDON DESC`,
+    { cpf: digitos },
+  );
+  const r = rows[0];
+  if (!r) return null;
+  return mapVerbatim(r);
 }
 
 /**
@@ -765,20 +818,43 @@ export async function obterResponsavelVerbatim(
  */
 export async function obterNomeRmPorCpf(
   cpf: string,
-): Promise<{ codUsuarioPS: number; nome: string } | null> {
+): Promise<{ codUsuarioPS: number | null; nome: string } | null> {
   const digitos = (cpf || "").replace(/\D/g, "");
   if (digitos.length !== 11) return null;
-  const rows = await query<{ CODUSUARIOPS: number; NOME: string | null }>(
+
+  // O DataServer valida a IMUTABILIDADE do nome contra a PPESSOA (pessoa global /
+  // cliente-fornecedor), NÃO contra a SPSUSUARIO. Uma mesma pessoa pode ter
+  // SPSUSUARIO.NOME divergente de PPESSOA.NOME (ex.: apelido no portal x nome
+  // civil). Como o erro "o campo nome não pode ser alterado" vem da PPESSOA, o
+  // nome canônico (imutável) é o dela. Comparamos o CPF ignorando qualquer
+  // formatação armazenada, por robustez.
+  const pessoas = await query<{ NOME: string | null }>(
+    `SELECT TOP 1 NOME
+     FROM PPESSOA
+     WHERE REPLACE(REPLACE(REPLACE(CPF,'.',''),'-',''),' ','') = @cpf
+       AND NOME IS NOT NULL AND LTRIM(RTRIM(NOME)) <> ''
+     ORDER BY CODIGO DESC`,
+    { cpf: digitos },
+  );
+
+  // CODUSUARIOPS do usuário de PS já existente (para referenciá-lo na inscrição
+  // em vez de criar uma pessoa nova que colidiria com a PPESSOA existente).
+  const usuarios = await query<{ CODUSUARIOPS: number; NOME: string | null }>(
     `SELECT TOP 1 CODUSUARIOPS, NOME
      FROM SPSUSUARIO
-     WHERE CPF = @cpf AND NOME IS NOT NULL AND LTRIM(RTRIM(NOME)) <> ''
+     WHERE REPLACE(REPLACE(REPLACE(CPF,'.',''),'-',''),' ','') = @cpf
+       AND NOME IS NOT NULL AND LTRIM(RTRIM(NOME)) <> ''
      ORDER BY RECCREATEDON DESC`,
     { cpf: digitos },
   );
-  const r = rows[0];
-  const nome = r?.NOME ?? "";
-  if (!r || !nome.trim()) return null;
-  return { codUsuarioPS: r.CODUSUARIOPS, nome };
+
+  const nomePessoa = pessoas[0]?.NOME ?? "";
+  const usuario = usuarios[0];
+  // Prioriza o nome canônico da PPESSOA; cai para o do SPSUSUARIO; senão,
+  // pessoa nova (retorna null e o chamador mantém o nome digitado).
+  const nome = nomePessoa.trim() ? nomePessoa : (usuario?.NOME ?? "");
+  if (!nome.trim()) return null;
+  return { codUsuarioPS: usuario?.CODUSUARIOPS ?? null, nome };
 }
 
 // ---------------------------------------------------------------------------
