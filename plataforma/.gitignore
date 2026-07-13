@@ -36,6 +36,9 @@ yarn-error.log*
 # discovery de DataServers RM (pode conter dados pessoais — LGPD)
 /scripts/discovery-out/
 
+# backups de hash de senha (simular-login.mjs) — NUNCA versionar (contém hashes)
+/scripts/.senha-backups/
+
 # vercel
 .vercel
 

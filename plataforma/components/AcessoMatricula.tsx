@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { CpfInput } from "@/components/CpfInput";
 import { PainelMatricula } from "@/components/PainelMatricula";
 import { cpfValido } from "@/lib/cpf";
@@ -13,7 +13,13 @@ type Reconhecimento = {
   emailMascarado: string | null;
 };
 
-type Etapa = "cpf" | "login" | "recuperar" | "inexistente" | "logado";
+type Etapa =
+  | "verificando"
+  | "cpf"
+  | "login"
+  | "recuperar"
+  | "inexistente"
+  | "logado";
 
 /** Máscara leve de data dd/mm/aaaa. */
 function formatarData(valor: string): string {
@@ -39,7 +45,7 @@ const botaoSecundario = "w-full text-sm text-cinza-suave hover:text-grafite";
  * PS). A lista de candidatos aptos cobre todos os PS do ciclo (SQL no BFF).
  */
 export function AcessoMatricula({ idps }: { idps: number }) {
-  const [etapa, setEtapa] = useState<Etapa>("cpf");
+  const [etapa, setEtapa] = useState<Etapa>("verificando");
   const [cpf, setCpf] = useState("");
   const [reconh, setReconh] = useState<Reconhecimento | null>(null);
   const [senha, setSenha] = useState("");
@@ -49,6 +55,42 @@ export function AcessoMatricula({ idps }: { idps: number }) {
   const [aviso, setAviso] = useState<string | null>(null);
 
   const cpfOk = cpfValido(cpf);
+
+  // Continuidade com a inscrição: a sessão é a MESMA (cookie `sid`). Se o
+  // responsável já está logado (ex.: veio do painel de inscrição), pula o login
+  // e abre direto o painel de matrícula.
+  useEffect(() => {
+    let ativo = true;
+    (async () => {
+      try {
+        const res = await fetch("/api/auth/me", { cache: "no-store" });
+        if (!ativo) return;
+        if (res.ok) {
+          const data = (await res.json()) as {
+            ok: boolean;
+            nome?: string | null;
+          };
+          if (data.ok) {
+            setReconh({
+              existe: true,
+              temSenhaCadastrada: true,
+              ehResponsavelDeAluno: false,
+              nome: data.nome ?? null,
+              emailMascarado: null,
+            });
+            setEtapa("logado");
+            return;
+          }
+        }
+        setEtapa("cpf");
+      } catch {
+        if (ativo) setEtapa("cpf");
+      }
+    })();
+    return () => {
+      ativo = false;
+    };
+  }, []);
 
   async function consultarCpf(e: React.FormEvent) {
     e.preventDefault();
@@ -167,7 +209,18 @@ export function AcessoMatricula({ idps }: { idps: number }) {
     recomecar();
   }
 
+  // Sessão expirada (401 no painel): volta ao login por CPF com um aviso — em
+  // vez de oferecer um "tentar novamente" que sempre falharia.
+  function sessaoExpirada() {
+    recomecar();
+    setErro("Sua sessão expirou. Entre novamente com seu CPF.");
+  }
+
   // ---- Etapa: CPF -----------------------------------------------------------
+  if (etapa === "verificando") {
+    return <p className="text-sm text-cinza-suave">Verificando seu acesso…</p>;
+  }
+
   if (etapa === "cpf") {
     return (
       <form onSubmit={consultarCpf} className="space-y-4" noValidate>
@@ -348,6 +401,7 @@ export function AcessoMatricula({ idps }: { idps: number }) {
     <PainelMatricula
       responsavelNome={reconh?.nome ?? "responsável"}
       onSair={() => void sair()}
+      onSessaoExpirada={sessaoExpirada}
     />
   );
 }

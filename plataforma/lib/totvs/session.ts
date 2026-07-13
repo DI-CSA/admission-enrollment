@@ -28,7 +28,16 @@ export interface SessaoBFF {
   expiraEm: number;
 }
 
-const sessoes = new Map<string, SessaoBFF>();
+// Singleton em globalThis: sem isto, o `Map` a nível de módulo é RECRIADO a cada
+// hot-reload/rebuild (dev) e por recompilações do Next, apagando todas as sessões
+// — o usuário era obrigado a logar de novo a cada navegação. Guardar no
+// globalThis mantém as sessões vivas enquanto o processo do servidor viver.
+const globalParaSessoes = globalThis as typeof globalThis & {
+  __sessoesBFF?: Map<string, SessaoBFF>;
+};
+const sessoes: Map<string, SessaoBFF> =
+  globalParaSessoes.__sessoesBFF ?? new Map<string, SessaoBFF>();
+globalParaSessoes.__sessoesBFF = sessoes;
 
 function limparExpiradas(agora: number) {
   for (const [sid, s] of sessoes) {

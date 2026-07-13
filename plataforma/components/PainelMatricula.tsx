@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { BlocoMatriculaCandidato } from "./BlocoMatriculaCandidato";
 
 interface CandidatoElegivel {
   codUsuarioPS: number;
@@ -11,31 +12,6 @@ interface CandidatoElegivel {
   statusOpcao: number | null;
   nomeProcesso: string | null;
 }
-
-interface ParametrosMatricula {
-  idAreaOfertada: number | null;
-  cadastraContrato: boolean;
-  utilizaTokenAssinaturaContrato: boolean;
-  permiteEnvioDeDocumentos: boolean;
-  exibirItinerario: boolean;
-  fichaMedicaFlexivelHabilitada: boolean;
-  textoInstrucoes: string | null;
-}
-
-interface PeriodoMatricula {
-  aberto: boolean;
-  dataInicio: string | null;
-  dataFim: string | null;
-}
-
-interface Contexto {
-  elegivel: boolean;
-  idAreaOfertada: number | null;
-  parametros: ParametrosMatricula | null;
-  periodo: PeriodoMatricula | null;
-}
-
-type EstadoContexto = Contexto | "carregando" | "erro" | undefined;
 
 const botaoSecundario = "w-full text-sm text-cinza-suave hover:text-grafite";
 
@@ -67,17 +43,17 @@ function rotuloProcesso(nomeProcesso: string | null): string | null {
 export function PainelMatricula({
   responsavelNome,
   onSair,
+  onSessaoExpirada,
 }: {
   responsavelNome: string;
   onSair?: () => void;
+  /** Chamado quando a sessão expira (401): o container volta ao login por CPF. */
+  onSessaoExpirada?: () => void;
 }) {
   const [elegiveis, setElegiveis] = useState<CandidatoElegivel[]>([]);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState<string | null>(null);
   const [selecionado, setSelecionado] = useState<string | null>(null);
-  const [contextos, setContextos] = useState<Record<string, EstadoContexto>>(
-    {},
-  );
 
   const carregar = useCallback(async () => {
     setCarregando(true);
@@ -87,6 +63,10 @@ export function PainelMatricula({
         cache: "no-store",
       });
       if (res.status === 401) {
+        if (onSessaoExpirada) {
+          onSessaoExpirada();
+          return;
+        }
         setErro("Sua sessão expirou. Recarregue a página e entre novamente.");
         return;
       }
@@ -103,40 +83,63 @@ export function PainelMatricula({
     } finally {
       setCarregando(false);
     }
-  }, []);
+  }, [onSessaoExpirada]);
 
   useEffect(() => {
     void carregar();
   }, [carregar]);
 
-  const carregarContexto = useCallback(async (c: CandidatoElegivel) => {
-    const chave = chaveCand(c);
-    setContextos((m) => ({ ...m, [chave]: "carregando" }));
-    try {
-      const res = await fetch(
-        `/api/matricula/contexto?numeroInscricao=${c.numeroInscricao ?? ""}&idps=${c.idps ?? ""}`,
-        { cache: "no-store" },
-      );
-      const data = (await res.json()) as
-        | ({ ok: true } & Contexto)
-        | { ok: false };
-      setContextos((m) => ({
-        ...m,
-        [chave]: data.ok ? data : "erro",
-      }));
-    } catch {
-      setContextos((m) => ({ ...m, [chave]: "erro" }));
-    }
-  }, []);
-
   function selecionar(c: CandidatoElegivel) {
-    const chave = chaveCand(c);
-    if (selecionado === chave) {
-      setSelecionado(null);
-      return;
-    }
-    setSelecionado(chave);
-    if (!contextos[chave]) void carregarContexto(c);
+    setSelecionado(chaveCand(c));
+  }
+
+  const candidatoAtual =
+    selecionado != null
+      ? (elegiveis.find((c) => chaveCand(c) === selecionado) ?? null)
+      : null;
+
+  // Tela dedicada da matrícula do candidato (sequência de passos do assistente).
+  if (candidatoAtual) {
+    const rotuloPs = rotuloProcesso(candidatoAtual.nomeProcesso);
+    return (
+      <div className="space-y-4">
+        <button
+          type="button"
+          onClick={() => setSelecionado(null)}
+          className="inline-flex items-center gap-1 text-sm font-medium text-csa-azul hover:underline"
+        >
+          <span aria-hidden>←</span> Voltar aos candidatos
+        </button>
+
+        <div className="rounded-lg bg-areia px-4 py-3">
+          <p className="text-base font-semibold text-grafite">
+            {candidatoAtual.nome}
+          </p>
+          {rotuloPs && (
+            <p className="text-sm font-medium text-csa-azul">{rotuloPs}</p>
+          )}
+          {candidatoAtual.numeroInscricao && (
+            <p className="text-sm text-cinza-suave">
+              Inscrição nº {candidatoAtual.numeroInscricao}
+            </p>
+          )}
+        </div>
+
+        <BlocoMatriculaCandidato
+          candidato={{
+            codUsuarioPS: candidatoAtual.codUsuarioPS,
+            nome: candidatoAtual.nome,
+            numeroInscricao: candidatoAtual.numeroInscricao,
+            idps: candidatoAtual.idps,
+          }}
+          onConcluir={() => {
+            setSelecionado(null);
+            void carregar();
+          }}
+          onSessaoExpirada={onSessaoExpirada}
+        />
+      </div>
+    );
   }
 
   return (
@@ -173,8 +176,6 @@ export function PainelMatricula({
         <ul className="space-y-2">
           {elegiveis.map((c, i) => {
             const chave = chaveCand(c);
-            const aberto = selecionado === chave;
-            const ctx = contextos[chave];
             const rotuloPs = rotuloProcesso(c.nomeProcesso);
             return (
               <li
@@ -197,58 +198,10 @@ export function PainelMatricula({
                         : "Inscrição não localizada"}
                     </p>
                   </div>
-                  <span className="shrink-0 text-xs font-medium text-csa-azul">
-                    {aberto ? "Ocultar" : "Ver matrícula"}
+                  <span className="flex shrink-0 items-center gap-1 text-xs font-medium text-csa-azul">
+                    Ver matrícula <span aria-hidden>→</span>
                   </span>
                 </button>
-
-                {aberto && (
-                  <div className="space-y-3 border-t border-black/10 px-4 py-3">
-                    {ctx === "carregando" || ctx === undefined ? (
-                      <p className="text-cinza-suave">
-                        Carregando dados da matrícula…
-                      </p>
-                    ) : ctx === "erro" ? (
-                      <div className="space-y-2">
-                        <p className="text-csa-vermelho">
-                          Não foi possível carregar a matrícula deste candidato
-                          agora.
-                        </p>
-                        <button
-                          type="button"
-                          onClick={() => carregarContexto(c)}
-                          className={botaoSecundario}
-                        >
-                          Tentar novamente
-                        </button>
-                      </div>
-                    ) : !ctx.elegivel ? (
-                      <p className="text-cinza-suave">
-                        Este candidato ainda não está apto à matrícula pelo
-                        portal.
-                      </p>
-                    ) : (
-                      <div className="space-y-2 rounded-lg bg-areia px-3 py-3">
-                        <p className="font-medium text-grafite">
-                          Candidato apto à matrícula.
-                        </p>
-                        {ctx.periodo && !ctx.periodo.aberto && (
-                          <p className="text-csa-vermelho">
-                            O período de matrícula não está aberto no momento.
-                          </p>
-                        )}
-                        {ctx.parametros?.textoInstrucoes && (
-                          <p className="whitespace-pre-line text-cinza-suave">
-                            {ctx.parametros.textoInstrucoes}
-                          </p>
-                        )}
-                        <p className="text-xs text-cinza-suave">
-                          O assistente de matrícula será habilitado nesta etapa.
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                )}
               </li>
             );
           })}

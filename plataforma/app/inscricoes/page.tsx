@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { SiteHeader } from "@/components/SiteHeader";
 import { SiteFooter } from "@/components/SiteFooter";
-import { ReconhecimentoForm } from "@/components/ReconhecimentoForm";
+import { AcessoInscricao } from "@/components/AcessoInscricao";
 import { ANO_PROCESSO } from "@/lib/processos";
 import { listarProcessosSeletivos } from "@/lib/totvs/queries";
 
@@ -41,27 +41,20 @@ export default async function InscricoesPage() {
       <SiteHeader />
       <main className="flex-1 bg-areia">
         <div className="mx-auto flex max-w-2xl flex-col px-4 py-16 md:py-24">
-          <h1 className="font-display text-3xl font-extrabold uppercase tracking-tight text-csa-navy">
-            Acesso do responsável
-          </h1>
           {idps == null ? (
-            <div className="mt-8 rounded-2xl border border-black/5 bg-white p-7 shadow-sm">
-              <p className="text-cinza-suave">
-                No momento não há processo seletivo com inscrições abertas. Por
-                favor, tente novamente mais tarde.
-              </p>
-            </div>
-          ) : (
             <>
-              <p className="mt-3 text-cinza-suave">
-                Informe o CPF do responsável para iniciar ou continuar a
-                inscrição.
-              </p>
-
+              <h1 className="font-display text-3xl font-extrabold uppercase tracking-tight text-csa-navy">
+                Acesso do responsável
+              </h1>
               <div className="mt-8 rounded-2xl border border-black/5 bg-white p-7 shadow-sm">
-                <ReconhecimentoForm idps={idps} />
+                <p className="text-cinza-suave">
+                  No momento não há processo seletivo com inscrições abertas.
+                  Por favor, tente novamente mais tarde.
+                </p>
               </div>
             </>
+          ) : (
+            <AcessoInscricao idps={idps} />
           )}
         </div>
       </main>

@@ -15,6 +15,12 @@ PLAT="$REPO_ROOT/plataforma"
 # NEXT_PUBLIC_* precisa estar presente NO BUILD para ser embutido. Override via env.
 RD_TRACKING_UUID="${NEXT_PUBLIC_RD_TRACKING_UUID:-d57e1c47-68f2-4339-b5cf-4cdf1098d0e5}"
 
+# Flags de exibicao da matricula (NEXT_PUBLIC_* -> embutidas NO BUILD). Default = false
+# (oculta plano de pagamento e minuta do contrato ate os valores/minutas serem divulgados).
+# Override via env, ex.: NEXT_PUBLIC_MATRICULA_EXIBIR_PLANO_PAGAMENTO=true ./scripts/deploy-app.sh
+MAT_EXIBIR_PLANO="${NEXT_PUBLIC_MATRICULA_EXIBIR_PLANO_PAGAMENTO:-false}"
+MAT_EXIBIR_MINUTA="${NEXT_PUBLIC_MATRICULA_EXIBIR_MINUTA_CONTRATO:-false}"
+
 SSH=(gcloud compute ssh "$VM" --zone="$ZONE" --project="$PROJECT" --tunnel-through-iap)
 SCP=(gcloud compute scp --zone="$ZONE" --project="$PROJECT" --tunnel-through-iap)
 
@@ -34,6 +40,8 @@ echo "==> 3/5 pnpm install + build (na VM, com placeholders de env para o build)
   TOTVS_DB_SERVER=build TOTVS_DB_USER=build TOTVS_DB_PASSWORD=build TOTVS_DB_NAME=build \
   RM_API_BASE=http://build.invalid SESSION_SECRET=build-placeholder-000000000000000000000000000000 \
   NEXT_PUBLIC_RD_TRACKING_UUID=$RD_TRACKING_UUID \
+  NEXT_PUBLIC_MATRICULA_EXIBIR_PLANO_PAGAMENTO=$MAT_EXIBIR_PLANO \
+  NEXT_PUBLIC_MATRICULA_EXIBIR_MINUTA_CONTRATO=$MAT_EXIBIR_MINUTA \
   bash -lc 'cd $APP_DIR && pnpm install --frozen-lockfile && pnpm build'"
 
 echo "==> 4/5 copia static/public para o standalone"

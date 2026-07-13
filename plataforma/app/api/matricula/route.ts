@@ -7,6 +7,7 @@ import {
   salvarMatricula,
   matriculaSomenteLeitura,
 } from "@/lib/totvs/matricula";
+import { reconciliarSenhaPosMatricula } from "@/lib/totvs/senha-ps";
 
 export const dynamic = "force-dynamic";
 
@@ -130,6 +131,25 @@ export async function POST(req: NextRequest) {
         },
         { status: 502 },
       );
+    }
+
+    // Reconciliação de senha: a efetivação da matrícula faz o RM provisionar uma
+    // conta no Portal do Aluno (GUSUARIO) com senha própria, diferente da que o
+    // usuário usa. Para manter UMA senha nos dois cofres (PS + Portal do Aluno),
+    // regravamos o mesmo envelope logo após matricular. Best-effort: nunca derruba
+    // a matrícula. Só quando há credenciais na sessão (não vale p/ chave-mestra).
+    if (sessao.credenciais?.cpf && sessao.credenciais.senha) {
+      try {
+        const { ps, portalAluno } = await reconciliarSenhaPosMatricula(
+          sessao.credenciais.cpf,
+          sessao.credenciais.senha,
+        );
+        console.info(
+          `[matricula] senha reconciliada pós-matrícula (PS=${ps}, PortalAluno=${portalAluno})`,
+        );
+      } catch (e) {
+        console.error("[matricula] reconciliação de senha falhou:", e);
+      }
     }
 
     return NextResponse.json(

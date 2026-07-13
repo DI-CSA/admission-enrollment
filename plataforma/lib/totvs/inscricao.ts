@@ -1481,6 +1481,51 @@ SELECT NOMEARQUIVO, DATAENVIO
     });
 }
 
+/** Arquivo já enviado numa inscrição, com a chave para baixá-lo. */
+export interface ArquivoInscricaoPorCod {
+  /** NOMEARQUIVO cru (com o sufixo `¶CODCOLIGADA-IDPS-NUM-CODDOC`). */
+  nomeArquivoBruto: string;
+  /** Nome amigável para exibição. */
+  nomeExibicao: string;
+  /** Chave de download (`CODCOLIGADA|IDPS|NUM|NOMEARQUIVO`) para `baixarArquivoDocumento`. */
+  chaveDownload: string;
+}
+
+/**
+ * Mapa dos arquivos já enviados numa inscrição, indexado por CODDOCUMENTO (o mais
+ * recente de cada). Usado para REAPROVEITAR documentos da inscrição em outras
+ * etapas (ex.: matrícula), sem obrigar o candidato a reenviar. A chave segue a
+ * mesma convenção de `listarDocumentosInscricao`.
+ */
+export async function mapaArquivosInscricaoPorCod(params: {
+  codColigada: number;
+  idps: number;
+  numeroInscricao: number;
+}): Promise<Map<number, ArquivoInscricaoPorCod>> {
+  const { codColigada, idps, numeroInscricao } = params;
+  const arquivos = await query<ArquivoCandidatoRow>(
+    `
+SELECT NOMEARQUIVO, DATAENVIO
+  FROM SPSARQUIVOSCANDIDATO
+ WHERE CODCOLIGADA = @cod AND IDPS = @idps AND NUMEROINSCRICAO = @num
+ ORDER BY DATAENVIO DESC`,
+    { cod: codColigada, idps, num: numeroInscricao },
+  );
+
+  const mapa = new Map<number, ArquivoInscricaoPorCod>();
+  for (const a of arquivos) {
+    const bruto = a.NOMEARQUIVO ?? "";
+    const cod = codDocumentoDoArquivo(bruto);
+    if (cod == null || mapa.has(cod)) continue; // mantém o mais recente
+    mapa.set(cod, {
+      nomeArquivoBruto: bruto,
+      nomeExibicao: nomeExibicaoArquivo(bruto),
+      chaveDownload: `${codColigada}|${idps}|${numeroInscricao}|${bruto}`,
+    });
+  }
+  return mapa;
+}
+
 /** Arquivo de documento para download (base64 + nome de exibição). */
 export interface ArquivoDocumento {
   base64: string;

@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sessaoDaRequisicao } from "@/lib/totvs/sessao-req";
 import { garantirSessaoNoIdps } from "@/lib/totvs/session";
-import { obterBoletoMatricula } from "@/lib/totvs/matricula";
-import { obterBoletoPdfCandidato } from "@/lib/totvs/inscricao";
+import {
+  obterBoletoMatricula,
+  obterBoletoMatriculaPdf,
+} from "@/lib/totvs/matricula";
 
 export const dynamic = "force-dynamic";
 
@@ -44,7 +46,11 @@ export async function GET(req: NextRequest) {
       );
     }
     try {
-      const pdf = await obterBoletoPdfCandidato(rmCookie, idBoleto);
+      const pdf = await obterBoletoMatriculaPdf(
+        rmCookie,
+        numeroInscricao,
+        idBoleto,
+      );
       if (pdf.base64) {
         const bytes = Buffer.from(pdf.base64, "base64");
         return new NextResponse(bytes, {

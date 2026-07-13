@@ -159,6 +159,19 @@ function lerBase64(file: File): Promise<string> {
   });
 }
 
+/** Baixa um arquivo (base64 puro) no browser, para conferência. */
+function baixarArquivoLocal(nomeArquivo: string, base64: string) {
+  const bin = atob(base64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const url = URL.createObjectURL(new Blob([bytes]));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = nomeArquivo || "documento";
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 const rotuloCampo = "mb-1 block text-sm font-medium text-grafite";
 const inputBase =
   "w-full rounded-lg border border-black/10 px-4 py-2.5 text-grafite outline-none transition focus:border-csa-azul focus:ring-2 focus:ring-csa-azul/20";
@@ -482,8 +495,13 @@ export function WizardInscricao({
       setDocsArquivos((m) => ({ ...m, [codDocumento]: undefined }));
       return;
     }
-    if (file.type !== "application/pdf") {
-      setDocErro("Envie os documentos em formato PDF.");
+    if (
+      file.type !== "application/pdf" &&
+      file.type !== "image/jpeg" &&
+      file.type !== "image/png" &&
+      !/\.(pdf|jpe?g|png)$/i.test(file.name)
+    ) {
+      setDocErro("Envie os documentos em formato PDF, JPG ou PNG.");
       return;
     }
     if (file.size > MAX_DOC_BYTES) {
@@ -1204,11 +1222,17 @@ export function WizardInscricao({
   // ---- Etapa: documentos ---------------------------------------------------
   if (etapa === "documentos") {
     const temObrigatorios = documentosExigidos.some((d) => d.obrigatorio);
+    // A fotografia do candidato (CODDOCUMENTO 2) aparece sempre como primeiro campo.
+    const documentosOrdenados = [
+      ...documentosExigidos.filter((d) => d.codDocumento === 2),
+      ...documentosExigidos.filter((d) => d.codDocumento !== 2),
+    ];
     return (
       <div className="space-y-4">
         <p className="text-sm font-semibold text-csa-azul">Documentos</p>
         <p className="text-sm text-grafite">
-          Anexe os documentos solicitados em formato PDF (até 5 MB cada).
+          Anexe os documentos solicitados em formato PDF, JPG ou PNG (até 5 MB
+          cada).
           {temObrigatorios
             ? " Os marcados com * são obrigatórios para concluir a inscrição."
             : ""}
@@ -1224,7 +1248,7 @@ export function WizardInscricao({
         )}
 
         <div className="space-y-3">
-          {documentosExigidos.map((d) => {
+          {documentosOrdenados.map((d) => {
             const arq = docsArquivos[d.codDocumento];
             return (
               <div
@@ -1244,20 +1268,32 @@ export function WizardInscricao({
                     {d.orientacao}
                   </p>
                 )}
-                <input
-                  type="file"
-                  accept="application/pdf"
-                  onChange={(e) =>
-                    void selecionarArquivo(
-                      d.codDocumento,
-                      e.target.files?.[0] ?? null,
-                    )
-                  }
-                  className="mt-2 block w-full text-sm text-grafite file:mr-3 file:rounded-md file:border-0 file:bg-csa-azul/10 file:px-3 file:py-1.5 file:text-sm file:text-csa-azul hover:file:bg-csa-azul/20"
-                />
+                <label className="mt-2 inline-flex cursor-pointer items-center rounded-md bg-csa-azul/10 px-3 py-1.5 text-sm font-medium text-csa-azul transition hover:bg-csa-azul/20">
+                  Escolher arquivo
+                  <input
+                    type="file"
+                    accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png"
+                    onChange={(e) =>
+                      void selecionarArquivo(
+                        d.codDocumento,
+                        e.target.files?.[0] ?? null,
+                      )
+                    }
+                    className="hidden"
+                  />
+                </label>
                 {arq && (
-                  <p className="mt-1 text-xs text-csa-azul">
-                    ✓ {arq.nomeArquivo}
+                  <p className="mt-1 flex items-center gap-2 text-xs text-csa-azul">
+                    <span className="truncate">✓ {arq.nomeArquivo}</span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        baixarArquivoLocal(arq.nomeArquivo, arq.base64)
+                      }
+                      className="shrink-0 font-medium underline hover:no-underline"
+                    >
+                      Baixar
+                    </button>
                   </p>
                 )}
               </div>

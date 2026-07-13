@@ -287,6 +287,23 @@ const MAX_ARQUIVO_BYTES = 5 * 1024 * 1024; // 5 MB por arquivo
 const MAX_DOCS = 30;
 const RE_BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
 
+// Aceita PDF (%PDF), JPEG (FF D8 FF) ou PNG (89 50 4E 47) pela assinatura dos
+// primeiros bytes, evitando upload de outros tipos de arquivo.
+function assinaturaAceita(bytes: Buffer): boolean {
+  const pdf =
+    bytes[0] === 0x25 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x44 &&
+    bytes[3] === 0x46;
+  const jpeg = bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  const png =
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47;
+  return pdf || jpeg || png;
+}
+
 interface DocumentoValidado {
   codDocumento: number;
   nomeArquivo: string;
@@ -339,20 +356,15 @@ async function validarDocumentos(
       return {
         ok: false,
         erro: "documento-grande",
-        mensagem: "Cada arquivo deve ser um PDF de até 5 MB.",
+        mensagem: "Cada arquivo deve ter no máximo 5 MB.",
       };
     }
-    // Assinatura %PDF (25 50 44 46) — evita upload de outros tipos de arquivo.
-    if (
-      bytes[0] !== 0x25 ||
-      bytes[1] !== 0x50 ||
-      bytes[2] !== 0x44 ||
-      bytes[3] !== 0x46
-    ) {
+    // Assinatura de PDF, JPEG ou PNG — evita upload de outros tipos de arquivo.
+    if (!assinaturaAceita(bytes)) {
       return {
         ok: false,
         erro: "documento-formato",
-        mensagem: "Envie os documentos em formato PDF.",
+        mensagem: "Envie os documentos em formato PDF, JPG ou PNG.",
       };
     }
     validados.push({

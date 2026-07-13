@@ -7,16 +7,42 @@ import {
   enviarDocumentosMatricula,
   removerDocumentoMatricula,
   matriculaSomenteLeitura,
+  obterDocumentosReaproveitaveisMatricula,
+  resolverChaveReaproveitamento,
   type DocumentoMatriculaUpload,
 } from "@/lib/totvs/matricula";
+import {
+  mapaArquivosInscricaoPorCod,
+  baixarArquivoDocumento,
+} from "@/lib/totvs/inscricao";
 
 export const dynamic = "force-dynamic";
+
+// Coligada padrão do RM (mesma convenção de lib/totvs/queries.ts).
+const COD_COLIGADA = Number(process.env.RM_COD_COLIGADA) || 1;
 
 // Limite do upload: base64 infla ~33%; o limite abaixo é sobre os BYTES
 // DECODIFICADOS. Manter em sincronia com o client e o Nginx da VM.
 const MAX_ARQUIVO_BYTES = 5 * 1024 * 1024; // 5 MB por arquivo
 const MAX_DOCS = 30;
 const RE_BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
+
+// Aceita PDF (%PDF), JPEG (FF D8 FF) ou PNG (89 50 4E 47) pela assinatura dos
+// primeiros bytes, evitando upload de outros tipos de arquivo.
+function assinaturaAceita(bytes: Buffer): boolean {
+  const pdf =
+    bytes[0] === 0x25 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x44 &&
+    bytes[3] === 0x46;
+  const jpeg = bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  const png =
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47;
+  return pdf || jpeg || png;
+}
 
 function cookieDe(
   req: NextRequest,
@@ -71,8 +97,33 @@ export async function GET(req: NextRequest) {
       rmCookie,
       idAreaOfertada,
     );
+
+    // Documentos já enviados na inscrição que podem ser pré-anexados na matrícula
+    // (aparecem primeiro no passo). Só quando a inscrição (numeroInscricao/idps)
+    // vier na query; falha silenciosa não bloqueia o passo.
+    const idps = Number(p.get("idps"));
+    const numeroInscricao = Number(p.get("numeroInscricao"));
+    let reaproveitados: Awaited<
+      ReturnType<typeof obterDocumentosReaproveitaveisMatricula>
+    > = [];
+    if (
+      Number.isInteger(idps) &&
+      idps > 0 &&
+      Number.isInteger(numeroInscricao) &&
+      numeroInscricao > 0
+    ) {
+      try {
+        reaproveitados = await obterDocumentosReaproveitaveisMatricula(
+          rmCookie,
+          { codColigada: COD_COLIGADA, idps, numeroInscricao, idAreaOfertada },
+        );
+      } catch (e) {
+        console.error("[matricula/documentos] reaproveitados falhou:", e);
+      }
+    }
+
     return NextResponse.json(
-      { ok: true, exigidos },
+      { ok: true, exigidos, reaproveitados },
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch (e) {
@@ -87,11 +138,24 @@ export async function GET(req: NextRequest) {
 interface UploadBody {
   idAreaOfertada?: number;
   numeroInscricao?: number;
+  idps?: number;
+  /**
+   * Upload incremental (um arquivo por vez, feito ao selecionar). Quando `true`,
+   * a validação NÃO exige que todos os obrigatórios estejam presentes no payload
+   * — a completude é garantida no cliente antes de finalizar a matrícula.
+   */
+  parcial?: boolean;
   documentos?: Array<{
     codDocumento?: number;
     detalhe?: string;
     nomeArquivo?: string;
     arquivoBase64?: string;
+    /**
+     * Quando `true`, o arquivo NÃO vem no payload: o servidor reaproveita o
+     * documento já enviado na inscrição (baixa o base64 pela chave do mapa de
+     * reaproveitamento). Nesse caso `arquivoBase64`/`nomeArquivo` são ignorados.
+     */
+    reaproveitarDaInscricao?: boolean;
   }>;
 }
 
@@ -99,18 +163,26 @@ interface UploadBody {
  * Valida os documentos enviados contra a lista exigida (autoritativa) do RM:
  * só aceita CODDOCUMENTO exigido, exige arquivo para os obrigatórios e checa
  * base64/assinatura %PDF/tamanho. O DETALHE gravado vem sempre da configuração.
+ * Itens marcados como `reaproveitarDaInscricao` têm o arquivo baixado da
+ * inscrição no servidor (nunca confiando no base64 do cliente).
  */
 async function validar(
   rmCookie: string,
-  idAreaOfertada: number,
+  ctx: {
+    idAreaOfertada: number;
+    numeroInscricao: number;
+    idps: number;
+    codColigada: number;
+  },
   enviados: UploadBody["documentos"],
+  parcial: boolean,
 ): Promise<
   | { ok: true; documentos: DocumentoMatriculaUpload[] }
   | { ok: false; erro: string; mensagem?: string }
 > {
   const exigidos = await obterDocumentosExigidosMatricula(
     rmCookie,
-    idAreaOfertada,
+    ctx.idAreaOfertada,
   );
   const porCodigo = new Map(
     exigidos
@@ -123,16 +195,59 @@ async function validar(
     return { ok: false, erro: "documentos-invalidos" };
   }
 
+  // Carregado sob demanda apenas quando há item reaproveitado.
+  let arquivosInscricao: Awaited<
+    ReturnType<typeof mapaArquivosInscricaoPorCod>
+  > | null = null;
+
   const validados: DocumentoMatriculaUpload[] = [];
   for (const d of lista) {
     const cod = Number(d?.codDocumento);
-    const nome = (d?.nomeArquivo ?? "").trim();
-    const b64 = (d?.arquivoBase64 ?? "").trim();
-    if (!Number.isInteger(cod) || !nome || !b64) continue; // ignora item vazio
+    if (!Number.isInteger(cod)) continue; // ignora item sem código
     const exig = porCodigo.get(cod);
     if (!exig) {
       return { ok: false, erro: "documento-nao-exigido" };
     }
+
+    let nome: string;
+    let b64: string;
+
+    if (d?.reaproveitarDaInscricao) {
+      // Reaproveitamento: o servidor localiza e baixa o arquivo da inscrição.
+      if (!arquivosInscricao) {
+        arquivosInscricao = await mapaArquivosInscricaoPorCod({
+          codColigada: ctx.codColigada,
+          idps: ctx.idps,
+          numeroInscricao: ctx.numeroInscricao,
+        });
+      }
+      const chave = resolverChaveReaproveitamento(cod, arquivosInscricao);
+      if (!chave) {
+        return {
+          ok: false,
+          erro: "documento-inscricao-ausente",
+          mensagem:
+            "O documento enviado na inscrição não foi encontrado para reaproveitamento.",
+        };
+      }
+      const baixado = await baixarArquivoDocumento(rmCookie, chave);
+      if (!baixado) {
+        return {
+          ok: false,
+          erro: "download-falhou",
+          mensagem:
+            "Não foi possível recuperar o documento enviado na inscrição. Anexe o arquivo manualmente.",
+        };
+      }
+      nome = baixado.nomeArquivo;
+      // Defensivo: remove um eventual prefixo data: para manter base64 puro.
+      b64 = baixado.base64.trim().replace(/^data:[^,]*,/, "");
+    } else {
+      nome = (d?.nomeArquivo ?? "").trim();
+      b64 = (d?.arquivoBase64 ?? "").trim();
+      if (!nome || !b64) continue; // ignora item vazio
+    }
+
     if (!RE_BASE64.test(b64)) {
       return { ok: false, erro: "documentos-invalidos" };
     }
@@ -146,20 +261,15 @@ async function validar(
       return {
         ok: false,
         erro: "documento-grande",
-        mensagem: "Cada arquivo deve ser um PDF de até 5 MB.",
+        mensagem: "Cada arquivo deve ter no máximo 5 MB.",
       };
     }
-    // Assinatura %PDF (25 50 44 46).
-    if (
-      bytes[0] !== 0x25 ||
-      bytes[1] !== 0x50 ||
-      bytes[2] !== 0x44 ||
-      bytes[3] !== 0x46
-    ) {
+    // Assinatura de PDF, JPEG ou PNG.
+    if (!assinaturaAceita(bytes)) {
       return {
         ok: false,
         erro: "documento-formato",
-        mensagem: "Envie os documentos em formato PDF.",
+        mensagem: "Envie os documentos em formato PDF, JPG ou PNG.",
       };
     }
     validados.push({
@@ -177,7 +287,7 @@ async function validar(
       d.codDocumento != null &&
       !enviadosCod.has(d.codDocumento),
   );
-  if (faltando.length > 0) {
+  if (!parcial && faltando.length > 0) {
     return {
       ok: false,
       erro: "documentos-obrigatorios",
@@ -237,9 +347,18 @@ export async function POST(req: NextRequest) {
   }
 
   const rmCookie = await cookieDe(req, sessao);
+  const idps =
+    Number(req.nextUrl.searchParams.get("idps")) || Number(body.idps) || 0;
+  const parcial =
+    req.nextUrl.searchParams.get("parcial") === "1" || body.parcial === true;
 
   try {
-    const validado = await validar(rmCookie, idAreaOfertada, body.documentos);
+    const validado = await validar(
+      rmCookie,
+      { idAreaOfertada, numeroInscricao, idps, codColigada: COD_COLIGADA },
+      body.documentos,
+      parcial,
+    );
     if (!validado.ok) {
       return NextResponse.json(
         { ok: false, erro: validado.erro, mensagem: validado.mensagem },

@@ -15,6 +15,28 @@ Estender a plataforma Next.js com um **fluxo dedicado de matrícula** para candi
 - **Bloqueio de E2E:** em produção **todas as opções 2027 estão com `STATUS=0`** (ninguém em chamada) ⇒ E2E de matrícula só é possível em **homolog** (`HomologacaoRM`) ou após a secretaria abrir chamadas.
 - **Pendente (quando retomar):** rotas `app/api/matricula/**`, página `/matricula`, `WizardMatricula.tsx` (Fases 2–5). Nada disso foi implementado ainda.
 
+## ✅ RESOLVIDO — documentos do candidato não copiavam para o aluno (2026-07-10)
+
+**Sintoma:** ao concluir a matrícula pelo portal (nosso *e* o nativo da TOTVS), os documentos que o candidato enviou (foto, certidão, CPF, atestados, etc.) **não apareciam na documentação do aluno** no RM. Os arquivos ficavam só em `SPSARQUIVOSCANDIDATO` (módulo Processo Seletivo); o checklist acadêmico `SDOCALUNO` era criado com `STATUS=0 / QUANTIDADE=0 / DTENTREGA=null` e **nenhuma** linha física era gravada em `SARQUIVOS` (`DATASERVER='EduDocAlunoData'`).
+
+**Não era o nosso código.** Provado por dois controles:
+1. **Teste do portal NATIVO da TOTVS** (sem o nosso BFF, RA `1202700275`): produziu **exatamente o mesmo estado** (SDOCALUNO zerado, SARQUIVOS = 0). Nosso fluxo é byte-idêntico ao nativo (3 chamadas: `GET DocumentosExigidosMatricula` → `POST UploadDocumentosMatricula` → `POST SalvaMatriculaViaCentral`).
+2. **Evidência no banco:** em 2026 (IDPERLET 11) a cópia sempre disparava; em 2027 (IDPERLET 86) nunca.
+
+**Causa-raiz (parametrização, não código):** A cópia candidato→aluno na "matrícula via central do candidato" é **automática** ao final da matrícula (rotina compilada do `RM.EduPS.WebAPI`, conta de sistema `RM`), **mas só dispara se o documento estiver marcado como tipo _Ingresso_** na **Educacional → Parametrização por Curso** (`SDOCEXIGIDOS.TIPO = 'I'`).
+- Referência oficial TOTVS (TDN): [15 - Aproveitamento de documentos enviados pelo candidato](https://tdn.totvs.com/display/LRM/15+-+Aproveitamento+de+documentos+enviados+pelo+candidato). Requisitos: (1) mesmo código de documento no PS (área ofertada) **e** no Educacional (Parametrização por Curso); (2) documento marcado como tipo **Ingresso**; (3) na área ofertada, aba Matrícula, "Permite o envio de documentos na matrícula" = `T`. Cumpridos, os documentos são salvos na documentação do aluno com status **"Entregue em validação"**.
+- **Prova no banco** (`SDOCEXIGIDOS`, coluna `TIPO`: `'I'`=Ingresso, `'P'`=Periódico):
+  - 2026 (IDPERLET 11): **157 docs `TIPO='I'`** → cópia sempre disparava.
+  - 2027 (IDPERLET 86): **149 docs, TODOS `TIPO='P'`, zero `'I'`** → cópia nunca disparava. A habilitação 652 (turma do caso de teste) tinha os 14 docs de matrícula todos como Periódico.
+
+**Correção aplicada (pela secretaria/admin no RM desktop, sem mexer no nosso código):** em **Educacional → Parametrização por Curso** do período 2027 (IDPERLET 86, habilitações 590–600 / 652 etc.), alterar o **tipo dos documentos de matrícula de _Periódico_ para _Ingresso_**, espelhando 2026 (pode-se usar o processo "Copiar matriz/parametrização por curso" a partir de 2026).
+
+**Confirmação pós-correção (RA `1202700276`, 2026-07-10):** o usuário refez a matrícula e a cópia **disparou**:
+- **8 arquivos** gravados em `SARQUIVOS` (`EduDocAlunoData`), `CHAVERM = '1;86;1202700276;<CODDOC>'`, criados pela conta `RM` no mesmo lote do `SALUNO`.
+- Os `SDOCALUNO` correspondentes ficaram com **`STATUS=1` (Entregue em validação)**, `QUANTIDADE=1` e `DTENTREGA` carimbada — exatamente como o TDN descreve. (Os docs não enviados nesse teste seguiram `STATUS=0`, o que é esperado.)
+
+**Conclusão:** o BFF e o `WizardMatricula` já estavam corretos; o problema era 100% parametrização do período 2027 no módulo Educacional. **Nada a alterar no nosso código.**
+
 ## Fases
 
 1. **Fase 0 — Descoberta e verificação de config (read-only, bloqueia o resto). ✅ CONCLUÍDA.** Script `plataforma/scripts/totvs-matricula-descoberta.mjs` (read-only). Resultados:
@@ -59,6 +81,41 @@ Estender a plataforma Next.js com um **fluxo dedicado de matrícula** para candi
 - Wizard **completo**, dirigido por parâmetros, em **fluxo dedicado** (`/matricula`).
 - Reaproveita auth/sessão, leituras SQL e padrões de upload/boleto/comprovante já validados.
 - Escrita (commit da matrícula) protegida por flag; **deploy só após confirmação** (portal em produção).
+
+## Documentos obrigatórios da matrícula (regra do CSA)
+
+O RM **não** marca esses documentos como obrigatórios (`SPSDOCUMENTOEXIGIDO.OBRIGATORIO`
+fica nulo). Em acordo com a secretaria, o CSA definiu a lista abaixo como **obrigatória** e
+a obrigatoriedade é aplicada **pelo nosso sistema** (cliente + BFF), não pelo RM. Estes itens
+também aparecem **no topo** do passo de documentos, exatamente nesta ordem:
+
+| Ordem | Documento | `CODDOCUMENTO` |
+|------:|-----------|:--------------:|
+| 1 | Foto do candidato | 2 |
+| 2 | CPF do candidato | 4 |
+| 3 | Certidão de nascimento | 3 |
+| 4 | Declaração de escolaridade | 16 |
+| 5 | CPF do responsável financeiro | 29 |
+| 6 | Identidade do responsável financeiro (RG ou CNH) | 30 |
+| 7 | Comprovante de residência do responsável financeiro | 38 |
+
+- **Fonte única da regra:** `plataforma/lib/matricula-documentos.ts`
+  (`DOCS_OBRIGATORIOS_MATRICULA` / `CODS_DOCS_OBRIGATORIOS_MATRICULA`) — módulo client-safe
+  importado tanto pela UI quanto pelo BFF.
+- **Marcação de obrigatório:** `obterDocumentosExigidosMatricula` (`lib/totvs/matricula.ts`)
+  faz `obrigatorio = flagRm(...) || obrigatorioCsa`, então o mesmo flag vale para a exibição
+  no cliente e para a validação do upload.
+- **Ordenação (topo da lista):** `PassoDocumentos` em `components/WizardMatricula.tsx`
+  (`obrigatoriosOrdenados`) — os obrigatórios primeiro, depois reaproveitados da inscrição,
+  depois os demais exigidos.
+- **Bloqueio de envio:** cliente (`enviarDocumentos`) e servidor (`validar` → `faltando`)
+  barram a conclusão enquanto faltar qualquer obrigatório. Certidão (3) e declaração de
+  escolaridade (16) podem ser satisfeitos pelo documento **reaproveitado da inscrição**
+  (3→3, 36→16); os demais exigem upload.
+- **Escopo:** só a matrícula. Na inscrição (área 590/IDPS 210) o RM já exige apenas certidão (3)
+  e declaração de escolaridade (36), ambos já `OBRIGATORIO='T'` no RM.
+- **Degradação segura:** se algum código não estiver na lista de exigidos de uma área, ele é
+  ignorado (não aparece nem bloqueia).
 
 ## Further Considerations
 

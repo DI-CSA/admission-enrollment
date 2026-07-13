@@ -1,5 +1,11 @@
 import "server-only";
 import { rmFetch } from "@/lib/rm/client";
+import { CODS_DOCS_OBRIGATORIOS_MATRICULA } from "@/lib/matricula-documentos";
+import { query } from "./db";
+import {
+  mapaArquivosInscricaoPorCod,
+  type ArquivoInscricaoPorCod,
+} from "./inscricao";
 
 // ---------------------------------------------------------------------------
 // Camada de MATRÍCULA (leitura autenticada + escrita) — WebAPI EduPS
@@ -123,6 +129,24 @@ function temErroRm(payload: unknown): boolean {
   return false;
 }
 
+/** Converte um valor de erro (string ou objeto) em texto legível. Evita o
+ * "[object Object]" quando a EduPS devolve a exceção como objeto. */
+function textoDeErroRm(v: unknown): string {
+  if (v == null) return "";
+  if (typeof v === "string") return v;
+  if (typeof v === "object") {
+    const o = v as Record<string, unknown>;
+    const m = o.Message ?? o.message ?? o.Mensagem ?? o.mensagem ?? o.Detail;
+    if (typeof m === "string" && m.trim() !== "") return m;
+    try {
+      return JSON.stringify(v);
+    } catch {
+      return String(v);
+    }
+  }
+  return String(v);
+}
+
 /** Extrai a mensagem de erro do envelope da EduPS (chave "RMException:..."). */
 function mensagemErroRm(payload: unknown): string | null {
   const env = payload as { data?: unknown } | undefined;
@@ -132,7 +156,7 @@ function mensagemErroRm(payload: unknown): string | null {
     const entrada = Object.entries(corpo as Record<string, unknown>).find(
       ([k]) => /exception/i.test(k),
     );
-    if (entrada) return String(entrada[1]);
+    if (entrada) return textoDeErroRm(entrada[1]);
   }
   return null;
 }
@@ -224,18 +248,35 @@ export interface ParametrosMatricula {
   cadastraContrato: boolean;
   utilizaTokenAssinaturaContrato: boolean;
   permiteEnvioDeDocumentos: boolean;
+  /** true quando o itinerário deve ser exibido NA MATRÍCULA (enum ≠ "Inscrição"). */
   exibirItinerario: boolean;
   fichaMedicaFlexivelHabilitada: boolean;
   atualizaDadosFiliacao1: boolean;
   atualizaDadosFiliacao2: boolean;
   atualizaDadosResponsavelFinanceiro: boolean;
   atualizaDadosResponsavelAcademico: boolean;
+  /** Inclusão obrigatória dos respectivos blocos de pessoas. */
+  obrigaFiliacao1: boolean;
+  obrigaFiliacao2: boolean;
+  obrigaResponsavelFinanceiro: boolean;
+  obrigaResponsavelAcademico: boolean;
   validarDebitosResponsavelFinanceiro: boolean;
+  exibeEtapaFiador: boolean;
+  somenteRespFinanceiroAceitaContrato: boolean;
+  /** Plano de pagamento padrão e se o portal permite trocar de plano. */
+  codPlanoPgtoPadrao: string | null;
+  alteraPlanoPagamentoPortal: boolean;
   /** Tipo de curso (usado por termo de imagem/voz e contrato). */
   codTipoCurso: number | null;
-  /** Coligada + id do relatório do contrato (quando cadastraContrato=true). */
+  /** Coligada + id do relatório do contrato (quando cadastraContrato=true). 0 = sem PDF. */
   codColigadaRelatorioContrato: number | null;
   idRelatorioContrato: number | null;
+  /** Chaves acadêmicas usadas por débitos/fiador. */
+  idPerlet: number | null;
+  idHabilitacaoFilial: number | null;
+  codFilial: number | null;
+  /** "N"/"P"/"M"... regra de filiação obrigatória. */
+  tipoFiliacaoObrigatoria: string | null;
   /** Texto/instruções de matrícula configurados (SPSPARAMETROPS). */
   textoInstrucoes: string | null;
   bruto: Record<string, unknown>;
@@ -262,6 +303,15 @@ export async function obterParametrosMatricula(
   const p = primeiroRegistro(json);
   if (!p) return null;
 
+  // ExibirItinerario é um ENUM (0=NãoUtiliza, 1=Inscrição, 2=Matrícula, 3=Ambos),
+  // não um booleano. O itinerário só entra na MATRÍCULA quando é 2 ou 3 e existe
+  // itinerário configurado na área ofertada (fiel a matricula.service.js).
+  const itinerarioEnum =
+    num(p, "ExibirItinerario") ?? num(p, "EXIBIRITINERARIO");
+  const existeItinerario = flagRm(
+    p["ExisteItinerarioAreaOfertada"] ?? p["EXISTEITINERARIOAREAOFERTADA"],
+  );
+
   return {
     cadastraContrato: flagRm(p["CadastraContrato"] ?? p["CADASTRACONTRATO"]),
     utilizaTokenAssinaturaContrato: flagRm(
@@ -271,7 +321,10 @@ export async function obterParametrosMatricula(
     permiteEnvioDeDocumentos: flagRm(
       p["PermiteEnvioDeDocumentos"] ?? p["PERMITEENVIODEDOCUMENTOS"],
     ),
-    exibirItinerario: flagRm(p["ExibirItinerario"] ?? p["EXIBIRITINERARIO"]),
+    exibirItinerario:
+      existeItinerario &&
+      itinerarioEnum != null &&
+      (itinerarioEnum === 2 || itinerarioEnum === 3),
     fichaMedicaFlexivelHabilitada: flagRm(
       p["FichaMedicaFlexivelHabilitada"] ?? p["FICHAMEDICAFLEXIVELHABILITADA"],
     ),
@@ -289,14 +342,45 @@ export async function obterParametrosMatricula(
       p["AtualizaDadosResponsavelAcademico"] ??
         p["ATUALIZADADOSRESPONSAVELACADEMICO"],
     ),
+    obrigaFiliacao1: flagRm(
+      p["ObrigaInclusaoDadosFiliacao1"] ?? p["OBRIGAINCLUSAODADOSFILIACAO1"],
+    ),
+    obrigaFiliacao2: flagRm(
+      p["ObrigaInclusaoDadosFiliacao2"] ?? p["OBRIGAINCLUSAODADOSFILIACAO2"],
+    ),
+    obrigaResponsavelFinanceiro: flagRm(
+      p["ObrigaInclusaoDadosResponsavelFinanceiro"] ??
+        p["OBRIGAINCLUSAODADOSRESPONSAVELFINANCEIRO"],
+    ),
+    obrigaResponsavelAcademico: flagRm(
+      p["ObrigaInclusaoDadosResponsavelAcademico"] ??
+        p["OBRIGAINCLUSAODADOSRESPONSAVELACADEMICO"],
+    ),
     validarDebitosResponsavelFinanceiro: flagRm(
       p["ValidarDebitosResponsavelFinanceiro"] ??
         p["VALIDARDEBITOSRESPONSAVELFINANCEIRO"],
     ),
+    exibeEtapaFiador: flagRm(p["ExibeEtapaFiador"] ?? p["EXIBEETAPAFIADOR"]),
+    somenteRespFinanceiroAceitaContrato: flagRm(
+      p["SomenteRespFinAceitaContrato"] ?? p["SOMENTERESPFINACEITACONTRATO"],
+    ),
+    codPlanoPgtoPadrao: str(p, "CodPlanoPgto") ?? str(p, "CODPLANOPGTO"),
+    alteraPlanoPagamentoPortal: flagRm(
+      p["AlteraPlnoPgtoPortal"] ?? p["ALTERAPLNOPGTOPORTAL"],
+    ),
     codTipoCurso: num(p, "CodTipoCurso") ?? num(p, "CODTIPOCURSO"),
     codColigadaRelatorioContrato:
-      num(p, "CodColigadaRelatorio") ?? num(p, "CODCOLIGADARELATORIO"),
-    idRelatorioContrato: num(p, "IdRelatorio") ?? num(p, "IDRELATORIO"),
+      num(p, "CodColigadaRelatorioContratoMatricula") ??
+      num(p, "CODCOLIGADARELATORIOCONTRATOMATRICULA"),
+    idRelatorioContrato:
+      num(p, "IdRelatorioContratoMatricula") ??
+      num(p, "IDRELATORIOCONTRATOMATRICULA"),
+    idPerlet: num(p, "IdPerlet") ?? num(p, "IDPERLET"),
+    idHabilitacaoFilial:
+      num(p, "IdHabilitacaoFilial") ?? num(p, "IDHABILITACAOFILIAL"),
+    codFilial: num(p, "CodFilial") ?? num(p, "CODFILIAL"),
+    tipoFiliacaoObrigatoria:
+      str(p, "TipoFiliacaoObrigatoria") ?? str(p, "TIPOFILIACAOOBRIGATORIA"),
     textoInstrucoes:
       str(p, "TextoInstrucoesMatricula") ?? str(p, "TEXTOINSTRUCOESMATRICULA"),
     bruto: p,
@@ -346,11 +430,19 @@ export async function obterPeriodoMatricula(
 
   return {
     aberto:
+      flagRm(p["PERIODOVALIDO"]) ||
+      flagRm(p["PeriodoValido"]) ||
       flagRm(p["PERIODOABERTO"]) ||
       flagRm(p["PeriodoAberto"]) ||
       flagRm(p["MATRICULAABERTA"]),
-    dataInicio: str(p, "DTINICIO") ?? str(p, "DataInicio"),
-    dataFim: str(p, "DTTERMINO") ?? str(p, "DataFim"),
+    dataInicio:
+      str(p, "DTINIMATRICCENTRALCANDIDATO") ??
+      str(p, "DTINICIO") ??
+      str(p, "DataInicio"),
+    dataFim:
+      str(p, "DTFIMMATRICCENTRALCANDIDATO") ??
+      str(p, "DTTERMINO") ??
+      str(p, "DataFim"),
     mensagem: str(p, "MENSAGEM") ?? str(p, "Mensagem"),
     bruto: p,
   };
@@ -390,13 +482,34 @@ export async function carregarPlanosPagamento(
   const json = await res.json();
   if (temErroRm(json)) return [];
 
-  return listaRegistros(json).map((r) => ({
-    codPlanoPgto: str(r, "CODPLANOPGTO") ?? str(r, "CodPlanoPgto"),
-    descricao: str(r, "DESCRICAO") ?? str(r, "Descricao"),
-    valor: num(r, "VALOR") ?? num(r, "Valor"),
-    numeroParcelas: num(r, "NUMEROPARCELAS") ?? num(r, "NumeroParcelas"),
-    bruto: r,
-  }));
+  return listaRegistros(json).map((r) => {
+    // O nativo exibe `nomePlano` como título do plano (ligado ao curso)
+    // — ver etapa-planos-pagamento.view.html. Os campos vêm em camelCase;
+    // mantemos variações de caixa por segurança.
+    const nomePlano =
+      str(r, "nomePlano") ?? str(r, "NomePlano") ?? str(r, "NOMEPLANO");
+    const descricaoPlano =
+      str(r, "descricaoPlano") ??
+      str(r, "DescricaoPlano") ??
+      str(r, "DESCRICAOPLANO");
+    return {
+      codPlanoPgto:
+        str(r, "codPlanoPgto") ??
+        str(r, "CODPLANOPGTO") ??
+        str(r, "CodPlanoPgto"),
+      descricao:
+        nomePlano ??
+        descricaoPlano ??
+        str(r, "DESCRICAO") ??
+        str(r, "Descricao"),
+      valor: num(r, "valor") ?? num(r, "VALOR") ?? num(r, "Valor"),
+      numeroParcelas:
+        num(r, "numeroParcelas") ??
+        num(r, "NUMEROPARCELAS") ??
+        num(r, "NumeroParcelas"),
+      bruto: r,
+    };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -428,12 +541,131 @@ export async function obterDocumentosExigidosMatricula(
   const json = await res.json();
   if (temErroRm(json)) return [];
 
-  return listaRegistros(json).map((r) => ({
-    codDocumento: num(r, "CODDOCUMENTO") ?? num(r, "CodDocumento"),
-    descricao: str(r, "DESCRICAO") ?? str(r, "Descricao"),
-    obrigatorio: flagRm(r["OBRIGATORIO"] ?? r["Obrigatorio"]),
-    bruto: r,
-  }));
+  return (
+    listaRegistros(json)
+      .map((r) => {
+        const codDocumento = num(r, "CODDOCUMENTO") ?? num(r, "CodDocumento");
+        // O CSA definiu documentos obrigatórios em acordo com a secretaria que o RM
+        // NÃO marca como obrigatórios; aplicamos a regra aqui (vale para a exibição
+        // no cliente e para a validação do upload no BFF).
+        const obrigatorioCsa =
+          codDocumento != null &&
+          CODS_DOCS_OBRIGATORIOS_MATRICULA.includes(codDocumento);
+        return {
+          codDocumento,
+          descricao: str(r, "DESCRICAO") ?? str(r, "Descricao"),
+          obrigatorio:
+            flagRm(r["OBRIGATORIO"] ?? r["Obrigatorio"]) || obrigatorioCsa,
+          bruto: r,
+        };
+      })
+      // Remove documentos tratados em outro passo do wizard (o contrato é
+      // gerado/assinado no passo de contrato, não é upload manual). Como novos
+      // contratos (ex.: 2027) serão cadastrados com códigos diferentes, o filtro
+      // é pelo NOME: qualquer documento cuja descrição contenha "contrato".
+      .filter((d) => !(d.descricao ?? "").toLowerCase().includes("contrato"))
+  );
+}
+
+/**
+ * Reaproveitamento de documentos da INSCRIÇÃO na MATRÍCULA.
+ *
+ * O candidato já anexou documentos na inscrição; alguns deles servem também para
+ * a matrícula e não precisam ser reenviados. A secretaria, porém, cadastrou o
+ * MESMO documento com CÓDIGOS DIFERENTES em cada fase — por isso o mapa abaixo
+ * relaciona `codDocumentoInscricao` (origem) → `codDocumento` (destino na
+ * matrícula). Só reaproveitamos quando o código de destino EXISTE na lista de
+ * exigidos da matrícula (senão o upload seria rejeitado pelo RM).
+ */
+export interface ParDocReaproveitavel {
+  /** CODDOCUMENTO no slot de matrícula (destino do upload). */
+  codDocumento: number;
+  /** CODDOCUMENTO com que o arquivo foi enviado na inscrição (origem). */
+  codDocumentoInscricao: number;
+}
+
+export const REAPROVEITAMENTO_DOCS_MATRICULA: ParDocReaproveitavel[] = [
+  { codDocumento: 3, codDocumentoInscricao: 3 }, // (*) Certidão de Nascimento
+  { codDocumento: 16, codDocumentoInscricao: 36 }, // Declaração de escolaridade
+];
+
+/** Documento da inscrição pronto para ser reaproveitado no passo da matrícula. */
+export interface DocumentoReaproveitado {
+  /** CODDOCUMENTO no slot de matrícula (destino). */
+  codDocumento: number;
+  /** CODDOCUMENTO com que o arquivo foi enviado na inscrição (origem). */
+  codDocumentoInscricao: number;
+  /** Descrição do slot de matrícula (usada como DETALHE no upload). */
+  descricao: string | null;
+  /** Nome amigável do arquivo enviado na inscrição. */
+  nomeArquivo: string;
+  /** Chave para baixar o arquivo da inscrição (`CODCOLIGADA|IDPS|NUM|NOMEARQUIVO`). */
+  chaveDownload: string;
+}
+
+/**
+ * Cruza os documentos EXIGIDOS na matrícula com os ARQUIVOS já enviados na
+ * inscrição (via mapa de reaproveitamento) e devolve os que podem ser
+ * pré-anexados. Retorna na ORDEM do `REAPROVEITAMENTO_DOCS_MATRICULA` (para que
+ * apareçam como os primeiros do passo de documentos).
+ */
+export async function obterDocumentosReaproveitaveisMatricula(
+  rmCookie: string,
+  params: {
+    codColigada: number;
+    idps: number;
+    numeroInscricao: number;
+    idAreaOfertada: number;
+  },
+): Promise<DocumentoReaproveitado[]> {
+  const { codColigada, idps, numeroInscricao, idAreaOfertada } = params;
+  const exigidos = await obterDocumentosExigidosMatricula(
+    rmCookie,
+    idAreaOfertada,
+  );
+  const exigidoPorCod = new Map(
+    exigidos
+      .filter((d) => d.codDocumento != null)
+      .map((d) => [d.codDocumento as number, d]),
+  );
+  const arquivos = await mapaArquivosInscricaoPorCod({
+    codColigada,
+    idps,
+    numeroInscricao,
+  });
+
+  const reaproveitados: DocumentoReaproveitado[] = [];
+  for (const par of REAPROVEITAMENTO_DOCS_MATRICULA) {
+    const exig = exigidoPorCod.get(par.codDocumento);
+    const arq = arquivos.get(par.codDocumentoInscricao);
+    if (!exig || !arq) continue; // slot não exigido ou arquivo inexistente
+    reaproveitados.push({
+      codDocumento: par.codDocumento,
+      codDocumentoInscricao: par.codDocumentoInscricao,
+      descricao: exig.descricao,
+      nomeArquivo: arq.nomeExibicao,
+      chaveDownload: arq.chaveDownload,
+    });
+  }
+  return reaproveitados;
+}
+
+/**
+ * Localiza a CHAVE de download do arquivo de inscrição que reaproveita um slot de
+ * matrícula (pela origem do mapa). Retorna `null` quando o slot não é
+ * reaproveitável ou o arquivo não existe na inscrição. O base64 em si é baixado
+ * na rota (que já usa `baixarArquivoDocumento`).
+ */
+export function resolverChaveReaproveitamento(
+  codDocumentoMatricula: number,
+  arquivosInscricao: Map<number, ArquivoInscricaoPorCod>,
+): string | null {
+  const par = REAPROVEITAMENTO_DOCS_MATRICULA.find(
+    (p) => p.codDocumento === codDocumentoMatricula,
+  );
+  if (!par) return null;
+  const arq = arquivosInscricao.get(par.codDocumentoInscricao);
+  return arq ? arq.chaveDownload : null;
 }
 
 /**
@@ -457,7 +689,10 @@ export interface ResultadoUploadDocumentos {
 /**
  * Envia os documentos exigidos da matrícula
  * (POST CentralCandidato/v1/UploadDocumentosMatricula). O corpo replica o portal
- * nativo: `{ SPSDOCUMENTOSEXIGIDOS: [{ CODDOCUMENTO, DETALHE, NOMEARQUIVO, ARQUIVO }] }`.
+ * nativo: `{ SPSDOCUMENTOSEXIGIDOS: [{ CODDOCUMENTO, DETALHE, NOMEARQUIVO,
+ * NOMEORIGINAL, ARQUIVO }] }`. `NOMEORIGINAL` é obrigatório: a WebAPI monta o
+ * DataTable a partir das chaves do JSON e lê essa coluna no servidor — omiti-la
+ * causa "A coluna 'NOMEORIGINAL' não pertence à tabela SPSDOCUMENTOSEXIGIDOS".
  */
 export async function enviarDocumentosMatricula(
   rmCookie: string,
@@ -474,6 +709,7 @@ export async function enviarDocumentosMatricula(
       CODDOCUMENTO: d.codDocumento,
       DETALHE: d.detalhe,
       NOMEARQUIVO: d.nomeArquivo,
+      NOMEORIGINAL: d.nomeArquivo,
       ARQUIVO: d.arquivoBase64,
     })),
   };
@@ -593,8 +829,14 @@ export async function gerarContratoMatricula(
   const b = primeiroRegistro(json);
   if (!b) return { base64: null, erro: null, bruto: null };
 
+  // O relatório de contrato da matrícula volta em `BytesPDF` (o portal nativo lê
+  // report[0].BytesPDF); mantemos os demais nomes como fallback.
   const report =
-    b["TOTVSReport"] ?? b["TotvsReport"] ?? b["BYTES"] ?? b["Arquivo"];
+    b["BytesPDF"] ??
+    b["TOTVSReport"] ??
+    b["TotvsReport"] ??
+    b["BYTES"] ??
+    b["Arquivo"];
   return {
     base64: report != null && String(report).trim() ? String(report) : null,
     erro: null,
@@ -772,13 +1014,40 @@ export interface BoletoMatricula {
   boletoRegistrado: boolean;
   urlBoletoFixo: string | null;
   temPdf: boolean;
+  /** Linha digitável (IPTE) do boleto, para pagamento por copiar-e-colar. */
+  linhaDigitavel: string | null;
   bruto: Record<string, unknown>;
+}
+
+// Coligada padrão do RM (mesma convenção de lib/totvs/queries.ts).
+const COD_COLIGADA = Number(process.env.RM_COD_COLIGADA) || 1;
+
+/**
+ * Lê a linha digitável (FBOLETO.IPTE) de um boleto pelo id. Leitura direta no
+ * CorporeRM (a WebAPI InfoBoletoMatricula não expõe a linha digitável). Retorna
+ * apenas dígitos; null quando não houver boleto registrado com IPTE.
+ */
+export async function obterLinhaDigitavelBoleto(
+  idBoleto: number,
+  codColigada: number = COD_COLIGADA,
+): Promise<string | null> {
+  if (!Number.isInteger(idBoleto) || idBoleto <= 0) return null;
+  try {
+    const linhas = await query<{ IPTE: string | null }>(
+      "SELECT IPTE FROM FBOLETO WHERE IDBOLETO = @id AND CODCOLIGADA = @col",
+      { id: idBoleto, col: codColigada },
+    );
+    const ipte = (linhas[0]?.IPTE ?? "").replace(/\D/g, "");
+    return ipte.length > 0 ? ipte : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
  * Recupera as informações do boleto da matrícula
- * (GET Financeiro/InfoBoletoMatricula). O PDF em si é baixado pela 2ª via
- * (Financeiro/2aviaBoletoCandidato), como na inscrição.
+ * (GET Financeiro/InfoBoletoMatricula). O PDF em si é baixado por
+ * obterBoletoMatriculaPdf (Financeiro/BoletoMatricula).
  */
 export async function obterBoletoMatricula(
   rmCookie: string,
@@ -800,6 +1069,8 @@ export async function obterBoletoMatricula(
   const tipoBoleto = str(b, "TIPOBOLETO");
   const temPdf =
     idBoleto != null && (tipoBoleto ?? "").toUpperCase() !== "HTML";
+  const linhaDigitavel =
+    idBoleto != null ? await obterLinhaDigitavelBoleto(idBoleto) : null;
 
   return {
     numeroInscricao,
@@ -808,7 +1079,50 @@ export async function obterBoletoMatricula(
     boletoRegistrado: flagRm(b["BOLETOREGISTRADO"]),
     urlBoletoFixo: str(b, "URLBOLETOFIXO"),
     temPdf,
+    linhaDigitavel,
     bruto: b,
+  };
+}
+
+/**
+ * Baixa o PDF do boleto da matrícula (GET Financeiro/BoletoMatricula, por
+ * numeroInscricao + idBoleto). Ao contrário do boleto de inscrição, o boleto de
+ * matrícula NÃO usa `2aviaBoletoCandidato` (cuja validação de dono é o
+ * candidato e recusa o boleto do responsável financeiro com "não pertence ao
+ * usuário logado"). Este endpoint devolve o PDF no campo `Bytes`.
+ */
+export async function obterBoletoMatriculaPdf(
+  rmCookie: string,
+  numeroInscricao: number,
+  idBoleto: number,
+): Promise<{ base64: string | null; erro: string | null }> {
+  const qs = new URLSearchParams({
+    numeroInscricao: String(numeroInscricao),
+    idBoleto: String(idBoleto),
+  });
+  const res = await rmFetch(`Financeiro/BoletoMatricula?${qs.toString()}`, {
+    webapi: WEBAPI,
+    cookie: rmCookie,
+  });
+  if (!res.ok) return { base64: null, erro: null };
+
+  const json = await res.json();
+
+  // Erro da EduPS: `data` é objeto com chave "RMException:Message" (HTTP 200).
+  const env = (json as { data?: unknown })?.data ?? json;
+  if (env && typeof env === "object" && !Array.isArray(env)) {
+    const entradaErro = Object.entries(env as Record<string, unknown>).find(
+      ([k]) => /exception/i.test(k),
+    );
+    if (entradaErro) return { base64: null, erro: String(entradaErro[1]) };
+  }
+  if (temErroRm(json)) return { base64: null, erro: mensagemErroRm(json) };
+
+  const b = primeiroRegistro(json);
+  const bytes = b?.["Bytes"] ?? b?.["BYTES"];
+  return {
+    base64: bytes != null && String(bytes).trim() ? String(bytes) : null,
+    erro: null,
   };
 }
 
@@ -853,4 +1167,415 @@ export async function obterInfoAlunoEducacional(
     alunoAtivo: flagRm(b["ALUNOATIVO"]),
     bruto: b,
   };
+}
+
+// ---------------------------------------------------------------------------
+// 10) Dados pessoais (candidato + relacionados) — leitura e escrita
+// ---------------------------------------------------------------------------
+//
+// Fluxo fiel ao portal nativo (matricula.factory.js / matricula.service.js):
+//   GET  CentralCandidato/v1/DadosPessoaisCandidatoResponsavel  → { data: { SPSUSUARIO: [...] } }
+//   POST CentralCandidato/v1/DadosPessoaisCandidatoResponsavel  → grava 1+ pessoas
+//   POST CentralCandidato/v1/AtualizaResponsavelTipoRelac       → vincula responsável×tipo
+//   GET  CentralCandidato/v1/CarregaCamposObrigatoriosMatricula → visibilidade/obrigatoriedade
+//   GET  CentralCandidato/v1/DebitosResponsavelFinanceiro       → débitos do resp. financeiro
+//   GET  Lista* (Países/Estados/Municípios/Nacionalidade/…)     → listas de apoio
+//
+// A pessoa é sempre identificada por CODUSUARIOPS (chave do PS). O CPF é apenas
+// atributo (e critério de unicidade que trava a edição quando já preenchido).
+
+/** Extrai um array nomeado do envelope EduPS (`{ data: { CHAVE: [...] } }`). */
+function arrayPorChave(
+  payload: unknown,
+  chaves: string[],
+): Array<Record<string, unknown>> {
+  const env = payload as { data?: unknown } | undefined;
+  let corpo: unknown =
+    env && typeof env === "object" && "data" in env ? env.data : env;
+  // Alguns retornos aninham `data.data` (ex.: CarregaCamposObrigatoriosMatricula).
+  if (
+    corpo &&
+    typeof corpo === "object" &&
+    !Array.isArray(corpo) &&
+    "data" in (corpo as Record<string, unknown>)
+  ) {
+    corpo = (corpo as Record<string, unknown>).data;
+  }
+  if (Array.isArray(corpo)) return corpo as Array<Record<string, unknown>>;
+  if (corpo && typeof corpo === "object") {
+    const obj = corpo as Record<string, unknown>;
+    for (const c of chaves) {
+      if (Array.isArray(obj[c]))
+        return obj[c] as Array<Record<string, unknown>>;
+    }
+  }
+  return [];
+}
+
+/** Campo do cadastro de matrícula: visibilidade/obrigatoriedade por perfil. */
+export interface CampoMatricula {
+  grupo: string | null;
+  idCampo: string | null;
+  nomeCampo: string | null;
+  visivelCandidato: boolean;
+  obrigatorioCandidato: boolean;
+  visivelResponsavel: boolean;
+  obrigatorioResponsavel: boolean;
+}
+
+/**
+ * Carrega os campos obrigatórios/visíveis da matrícula
+ * (GET CentralCandidato/v1/CarregaCamposObrigatoriosMatricula). Dirige quais campos
+ * cada formulário de pessoa mostra e quais são obrigatórios — nunca hardcodar.
+ */
+export async function obterCamposObrigatoriosMatricula(
+  rmCookie: string,
+): Promise<CampoMatricula[]> {
+  const res = await rmFetch(
+    "CentralCandidato/v1/CarregaCamposObrigatoriosMatricula",
+    { webapi: WEBAPI, cookie: rmCookie },
+  );
+  if (!res.ok) return [];
+
+  const json = await res.json();
+  if (temErroRm(json)) return [];
+
+  return arrayPorChave(json, ["ListaParametrosPessoa"]).map((c) => ({
+    grupo: str(c, "GrupoCampo"),
+    idCampo: str(c, "IdCampo"),
+    nomeCampo: str(c, "NomeCampo"),
+    visivelCandidato: flagRm(c["VisivelCandidato"]),
+    obrigatorioCandidato: flagRm(c["ObrigatorioCandidato"]),
+    visivelResponsavel: flagRm(c["VisivelResponsavel"]),
+    obrigatorioResponsavel: flagRm(c["ObrigatorioResponsavel"]),
+  }));
+}
+
+/** Papel de uma pessoa no vínculo com o candidato. */
+export type TipoRelacaoMatricula =
+  | "candidato"
+  | "pai"
+  | "mae"
+  | "responsavel_financeiro"
+  | "responsavel_academico"
+  | "fiador";
+
+/** Pessoa (candidato ou relacionado) do cadastro de matrícula. */
+export interface PessoaMatricula {
+  codUsuarioPS: number | null;
+  nome: string | null;
+  cpf: string | null;
+  email: string | null;
+  tipoRelac: number | null;
+  codUsuarioPSDep: number | null;
+  /** Registro bruto completo (base para edição + POST de volta). */
+  bruto: Record<string, unknown>;
+}
+
+/**
+ * Lê os dados pessoais do candidato e relacionados
+ * (GET CentralCandidato/v1/DadosPessoaisCandidatoResponsavel). Retorna o array
+ * SPSUSUARIO tipado; `bruto` preserva todos os campos para reenvio no POST.
+ */
+export async function obterDadosPessoaisMatricula(
+  rmCookie: string,
+  numeroInscricao: number,
+): Promise<PessoaMatricula[]> {
+  const qs = new URLSearchParams({ numeroInscricao: String(numeroInscricao) });
+  const res = await rmFetch(
+    `CentralCandidato/v1/DadosPessoaisCandidatoResponsavel?${qs.toString()}`,
+    { webapi: WEBAPI, cookie: rmCookie },
+  );
+  if (!res.ok) return [];
+
+  const json = await res.json();
+  if (temErroRm(json)) return [];
+
+  return arrayPorChave(json, ["SPSUSUARIO"]).map((u) => ({
+    codUsuarioPS: num(u, "CODUSUARIOPS"),
+    nome: str(u, "NOME"),
+    cpf: str(u, "CPF"),
+    email: str(u, "EMAIL"),
+    tipoRelac: num(u, "TIPORELAC"),
+    codUsuarioPSDep: num(u, "CODUSUARIOPSDEP"),
+    bruto: u,
+  }));
+}
+
+export interface ResultadoSalvarDados {
+  ok: boolean;
+  erro: string | null;
+  pessoas: Array<Record<string, unknown>> | null;
+  bruto: unknown;
+}
+
+/**
+ * Grava os dados pessoais de UMA pessoa (candidato ou relacionado)
+ * (POST CentralCandidato/v1/DadosPessoaisCandidatoResponsavel). Corpo replica o
+ * modelJSON nativo: `{ SPSUSUARIO: [pessoa], SPSINSCAREAOFERTACOMPL: [] }`.
+ *
+ * `pessoa` deve conter o registro completo (bruto carregado) com os campos
+ * editados e as flags de papel (EHCANDIDATO/EHPAI/EHMAE/EHRESPFIN/EHRESPACAD/
+ * EHFIADOR) já ajustadas; para relacionados, `CODUSUARIORELAC` = CODUSUARIOPS do
+ * candidato. A validação do guard de somente-leitura é feita na rota BFF.
+ */
+export async function salvarDadosPessoaisMatricula(
+  rmCookie: string,
+  pessoa: Record<string, unknown>,
+): Promise<ResultadoSalvarDados> {
+  const body = { SPSUSUARIO: [pessoa], SPSINSCAREAOFERTACOMPL: [] };
+  const res = await rmFetch(
+    "CentralCandidato/v1/DadosPessoaisCandidatoResponsavel",
+    { webapi: WEBAPI, method: "POST", body, cookie: rmCookie },
+  );
+  if (!res.ok) {
+    return { ok: false, erro: null, pessoas: null, bruto: null };
+  }
+
+  const json = await res.json();
+  if (temErroRm(json)) {
+    return {
+      ok: false,
+      erro: mensagemErroRm(json),
+      pessoas: null,
+      bruto: json,
+    };
+  }
+  const pessoas = arrayPorChave(json, ["SPSUSUARIO"]);
+  return {
+    ok: pessoas.length > 0,
+    erro: null,
+    pessoas,
+    bruto: json,
+  };
+}
+
+/**
+ * Atualiza o tipo de relacionamento entre o candidato e um responsável
+ * (POST CentralCandidato/v1/AtualizaResponsavelTipoRelac). Guard na rota BFF.
+ */
+export async function atualizarResponsavelTipoRelac(
+  rmCookie: string,
+  params: {
+    numeroInscricao: number;
+    codUsuarioPSTipoRelac: number;
+    tipoRelacaoUsuario: number;
+  },
+): Promise<ResultadoSalvarDados> {
+  const qs = new URLSearchParams({
+    numeroInscricao: String(params.numeroInscricao),
+    codUsuarioPSTipoRelac: String(params.codUsuarioPSTipoRelac),
+    tipoRelacaoUsuario: String(params.tipoRelacaoUsuario),
+  });
+  const res = await rmFetch(
+    `CentralCandidato/v1/AtualizaResponsavelTipoRelac?${qs.toString()}`,
+    { webapi: WEBAPI, method: "POST", body: {}, cookie: rmCookie },
+  );
+  if (!res.ok) return { ok: false, erro: null, pessoas: null, bruto: null };
+
+  const json = await res.json();
+  if (temErroRm(json)) {
+    return {
+      ok: false,
+      erro: mensagemErroRm(json),
+      pessoas: null,
+      bruto: json,
+    };
+  }
+  return { ok: true, erro: null, pessoas: null, bruto: json };
+}
+
+/** Resultado da validação de débitos do responsável financeiro. */
+export interface DebitosResponsavelFinanceiro {
+  cpf: string | null;
+  possuiDebitos: boolean;
+  /** true quando os débitos IMPEDEM a matrícula. */
+  bloqueia: boolean;
+  mensagem: string | null;
+  bruto: Record<string, unknown>;
+}
+
+/**
+ * Valida débitos do responsável financeiro
+ * (GET CentralCandidato/v1/DebitosResponsavelFinanceiro). Só relevante quando
+ * `ParametrosMatricula.validarDebitosResponsavelFinanceiro` é verdadeiro.
+ */
+export async function obterDebitosResponsavelFinanceiro(
+  rmCookie: string,
+  params: {
+    idAreaOfertada: number;
+    cpf: string;
+    nome?: string;
+    idHabilitacaoFilial?: number;
+  },
+): Promise<DebitosResponsavelFinanceiro | null> {
+  const qs = new URLSearchParams({
+    idAreaOfertada: String(params.idAreaOfertada),
+    cpf: params.cpf.replace(/\D/g, ""),
+    nome: params.nome ?? "",
+    idHabilitacaoFilial: String(params.idHabilitacaoFilial ?? 0),
+  });
+  const res = await rmFetch(
+    `CentralCandidato/v1/DebitosResponsavelFinanceiro?${qs.toString()}`,
+    { webapi: WEBAPI, cookie: rmCookie },
+  );
+  if (!res.ok) return null;
+
+  const json = await res.json();
+  if (temErroRm(json)) return null;
+  const b = primeiroRegistro(json);
+  if (!b) return null;
+
+  return {
+    cpf: str(b, "Cpf") ?? str(b, "CPF"),
+    possuiDebitos: flagRm(b["PossuiDebitosFinanceiros"]),
+    bloqueia: flagRm(b["Bloqueia"]),
+    mensagem: str(b, "Mensagem"),
+    bruto: b,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 11) Listas de apoio (lookups) para os formulários de dados pessoais
+// ---------------------------------------------------------------------------
+
+/** Item normalizado de uma lista de apoio (dropdown). */
+export interface ItemLista {
+  codigo: string;
+  descricao: string;
+}
+
+/** Tipos de lista suportados (fiel a edups-utils.factory.js). */
+export type TipoListaMatricula =
+  | "paises"
+  | "estados"
+  | "municipios"
+  | "estadoCivil"
+  | "nacionalidade"
+  | "corRaca"
+  | "grauInstrucao"
+  | "profissao"
+  | "tipoRua"
+  | "tipoBairro"
+  | "tipoSanguineo";
+
+interface DefLista {
+  /** Caminho do endpoint (pode conter `:idPais`/`:codEtd`). */
+  path: string;
+  /** Chave do array no envelope. */
+  chave: string;
+  /** Campos (código, descrição) de cada item. */
+  campoCodigo: string;
+  campoDescricao: string;
+}
+
+const DEFS_LISTA: Record<TipoListaMatricula, DefLista> = {
+  paises: {
+    path: "ListaPaises",
+    chave: "GPais",
+    campoCodigo: "IDPAIS",
+    campoDescricao: "DESCRICAO",
+  },
+  estados: {
+    path: "ListaEstados/:idPais",
+    chave: "GEtd",
+    campoCodigo: "CODETD",
+    campoDescricao: "NOME",
+  },
+  municipios: {
+    path: "ListaMunicipios/:codEtd",
+    chave: "GMUNICIPIO",
+    campoCodigo: "CODMUNICIPIO",
+    campoDescricao: "NOMEMUNICIPIO",
+  },
+  estadoCivil: {
+    path: "ListaEstadoCivil",
+    chave: "PCODESTCIVIL",
+    campoCodigo: "CODCLIENTE",
+    campoDescricao: "DESCRICAO",
+  },
+  nacionalidade: {
+    path: "ListaNacionalidade",
+    chave: "PCODNACAO",
+    campoCodigo: "CODCLIENTE",
+    campoDescricao: "DESCRICAO",
+  },
+  corRaca: {
+    path: "ListaCorRaca",
+    chave: "PCORRACA",
+    campoCodigo: "CODCLIENTE",
+    campoDescricao: "DESCRICAO",
+  },
+  grauInstrucao: {
+    path: "ListaGrauInstrucao",
+    chave: "PCODINSTRUCAO",
+    campoCodigo: "CODCLIENTE",
+    campoDescricao: "DESCRICAO",
+  },
+  profissao: {
+    path: "ListaProfissao",
+    chave: "EProfiss",
+    campoCodigo: "CODCLIENTE",
+    campoDescricao: "DESCRICAO",
+  },
+  tipoRua: {
+    path: "ListaTipoRua",
+    chave: "DTipoRua",
+    campoCodigo: "CODIGO",
+    campoDescricao: "DESCRICAO",
+  },
+  tipoBairro: {
+    path: "ListaTipoBairro",
+    chave: "DTipoBairro",
+    campoCodigo: "CODIGO",
+    campoDescricao: "DESCRICAO",
+  },
+  tipoSanguineo: {
+    path: "ListaTipoSanguineo",
+    chave: "STIPOSANGUINEO",
+    campoCodigo: "CODIGO",
+    campoDescricao: "DESCRICAO",
+  },
+};
+
+/**
+ * Carrega uma lista de apoio para dropdowns dos formulários de matrícula.
+ * `estados` exige `idPais`; `municipios` exige `codEtd` (a UF, ex.: "RJ").
+ * Retorna itens normalizados `{ codigo, descricao }` ordenados por descrição.
+ */
+export async function obterListaMatricula(
+  rmCookie: string,
+  tipo: TipoListaMatricula,
+  opts?: { idPais?: number | string; codEtd?: string },
+): Promise<ItemLista[]> {
+  const def = DEFS_LISTA[tipo];
+  let path = def.path;
+  if (path.includes(":idPais")) {
+    if (opts?.idPais == null) return [];
+    path = path.replace(":idPais", encodeURIComponent(String(opts.idPais)));
+  }
+  if (path.includes(":codEtd")) {
+    if (!opts?.codEtd) return [];
+    path = path.replace(":codEtd", encodeURIComponent(opts.codEtd));
+  }
+
+  const res = await rmFetch(path, { webapi: WEBAPI, cookie: rmCookie });
+  if (!res.ok) return [];
+
+  const json = await res.json();
+  if (temErroRm(json)) return [];
+
+  const itens = arrayPorChave(json, [def.chave])
+    .map((r) => {
+      const codigo = r[def.campoCodigo];
+      const descricao = r[def.campoDescricao];
+      return {
+        codigo: codigo == null ? "" : String(codigo),
+        descricao: descricao == null ? "" : String(descricao),
+      };
+    })
+    .filter((i) => i.codigo !== "" && i.descricao !== "");
+
+  itens.sort((a, b) => a.descricao.localeCompare(b.descricao, "pt-BR"));
+  return itens;
 }

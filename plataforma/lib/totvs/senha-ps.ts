@@ -75,3 +75,47 @@ export async function restaurarEnvelopeSenhaPSporCpf(
     { env: envelope, cpf: digitos },
   );
 }
+
+// ---------------------------------------------------------------------------
+// Alinhamento da senha do Portal do Aluno (GUSUARIO) — reconciliação pós-matrícula.
+// ---------------------------------------------------------------------------
+//
+// Ao efetivar a matrícula, o RM PROVISIONA uma conta no Portal do Aluno (GUSUARIO
+// com login = CPF) com uma senha PRÓPRIA (gerada por ele), diferente da que o
+// usuário usa no Processo Seletivo. Como o nosso login prefere o Portal do Aluno
+// quando a conta existe, isso quebra o acesso do usuário com a senha que ele já
+// conhecia. Para manter UMA senha nos dois cofres, gravamos o mesmo envelope em
+// GUSUARIO logo após a matrícula. O UPDATE só afeta a conta se ela existir
+// (CODUSUARIO = CPF); se não houver GUSUARIO, não faz nada.
+
+/**
+ * Grava `senha` (mesmo envelope Bcrypt do PS) na conta do Portal do Aluno cujo
+ * login é o CPF. Retorna o nº de linhas atualizadas (0 = o CPF não tem GUSUARIO).
+ */
+export async function definirSenhaPortalAlunoPorCpf(
+  cpf: string,
+  senha: string,
+): Promise<number> {
+  const digitos = (cpf || "").replace(/\D/g, "");
+  if (digitos.length !== 11) return 0;
+  const envelope = gerarEnvelopeSenhaPS(senha);
+  return executar(`UPDATE GUSUARIO SET SENHA = @env WHERE CODUSUARIO = @cpf`, {
+    env: envelope,
+    cpf: digitos,
+  });
+}
+
+/**
+ * Reconcilia a senha nos DOIS cofres (Processo Seletivo e Portal do Aluno) para o
+ * CPF, deixando ambos com a mesma senha `senha`. Idempotente. Best-effort do lado
+ * do chamador: uma falha aqui não deve derrubar a operação principal (matrícula).
+ * Retorna quantas linhas foram atualizadas em cada cofre.
+ */
+export async function reconciliarSenhaPosMatricula(
+  cpf: string,
+  senha: string,
+): Promise<{ ps: number; portalAluno: number }> {
+  const ps = await definirSenhaPSporCpf(cpf, senha);
+  const portalAluno = await definirSenhaPortalAlunoPorCpf(cpf, senha);
+  return { ps, portalAluno };
+}

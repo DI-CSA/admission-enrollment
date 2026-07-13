@@ -2,6 +2,11 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { WizardInscricao } from "@/components/WizardInscricao";
+import { BlocoMatriculaCandidato } from "@/components/BlocoMatriculaCandidato";
+import {
+  DetalhesMatricula,
+  type MatriculaResumo,
+} from "@/components/DetalhesMatricula";
 
 interface Dependente {
   idUsuario: number | null;
@@ -28,6 +33,18 @@ interface SituacaoPagamento {
   valorPago: number | null;
   dataPagamento: string | null;
   dataVencimento: string | null;
+}
+
+// Candidato do responsável logado apto à MATRÍCULA (mesma sessão da inscrição).
+// Vem de /api/matricula/elegiveis (status ∈ {5,7} + DISPONIBILIZAMATRICULAPORTAL='T').
+interface CandidatoElegivelMatricula {
+  codUsuarioPS: number;
+  nome: string;
+  numeroInscricao: number | null;
+  idps: number | null;
+  idAreaInteresse: number | null;
+  statusOpcao: number | null;
+  nomeProcesso: string | null;
 }
 
 interface Boleto {
@@ -189,10 +206,13 @@ export function PainelResponsavel({
   idps,
   responsavelNome,
   onSair,
+  onSessaoExpirada,
 }: {
   idps: number;
   responsavelNome: string;
   onSair?: () => void;
+  /** Chamado quando a sessão expira (401): o container volta ao login por CPF. */
+  onSessaoExpirada?: () => void;
 }) {
   const [dependentes, setDependentes] = useState<Dependente[]>([]);
   const [carregando, setCarregando] = useState(true);
@@ -219,38 +239,125 @@ export function PainelResponsavel({
   const [baixandoComprovante, setBaixandoComprovante] = useState(false);
   const [erroComprovante, setErroComprovante] = useState<string | null>(null);
   const [atualizando, setAtualizando] = useState(false);
+  // Elegibilidade à matrícula (mesma sessão): mapa por `idps-numeroInscricao`.
+  const [elegiveisMat, setElegiveisMat] = useState<
+    Record<string, CandidatoElegivelMatricula>
+  >({});
+  // Candidatos JÁ matriculados (RA no Educacional), por `idps-numeroInscricao`.
+  // Persistente: consultado na WebAPI ao carregar, independe da sessão atual.
+  const [jaMatriculado, setJaMatriculado] = useState<Record<string, boolean>>(
+    {},
+  );
+  // Resumo da matrícula concluída NESTA sessão (mensagem/plano/data), por
+  // `idps-numeroInscricao`. Complementa o drawer com o que a WebAPI não devolve.
+  const [resumosMatricula, setResumosMatricula] = useState<
+    Record<string, MatriculaResumo>
+  >({});
+  // Candidato cuja matrícula está sendo PREENCHIDA em tela cheia. O drawer é só
+  // para conferência; o assistente multi-etapas assume o painel inteiro (como a
+  // inscrição), por isso guardamos o dependente + o codUsuarioPS da elegibilidade.
+  const [matriculando, setMatriculando] = useState<{
+    dep: Dependente;
+    codUsuarioPS: number;
+  } | null>(null);
 
-  const carregar = useCallback(async (opts?: { silencioso?: boolean }) => {
-    // Refresh silencioso: mantém a lista atual visível (sem trocar para o estado
-    // "Carregando…"), evitando o "pisca" da tela ao atualizar.
-    if (opts?.silencioso) setAtualizando(true);
-    else setCarregando(true);
-    setErro(null);
-    try {
-      const res = await fetch("/api/inscricao/minhas", { cache: "no-store" });
-      if (res.status === 401) {
-        setErro("Sua sessão expirou. Recarregue a página e entre novamente.");
-        return;
-      }
-      const data = (await res.json()) as
-        | { ok: true; dependentes: Dependente[] }
-        | { ok: false };
-      if (!data.ok) {
+  const carregar = useCallback(
+    async (opts?: { silencioso?: boolean }) => {
+      // Refresh silencioso: mantém a lista atual visível (sem trocar para o estado
+      // "Carregando…"), evitando o "pisca" da tela ao atualizar.
+      if (opts?.silencioso) setAtualizando(true);
+      else setCarregando(true);
+      setErro(null);
+      try {
+        const res = await fetch("/api/inscricao/minhas", { cache: "no-store" });
+        if (res.status === 401) {
+          if (onSessaoExpirada) {
+            onSessaoExpirada();
+            return;
+          }
+          setErro("Sua sessão expirou. Recarregue a página e entre novamente.");
+          return;
+        }
+        const data = (await res.json()) as
+          | { ok: true; dependentes: Dependente[] }
+          | { ok: false };
+        if (!data.ok) {
+          setErro("Não foi possível carregar seus candidatos agora.");
+          return;
+        }
+        setDependentes(data.dependentes);
+      } catch {
         setErro("Não foi possível carregar seus candidatos agora.");
-        return;
+      } finally {
+        setCarregando(false);
+        setAtualizando(false);
       }
-      setDependentes(data.dependentes);
+    },
+    [onSessaoExpirada],
+  );
+
+  // Elegibilidade à matrícula é complementar ao painel de inscrição: usa a MESMA
+  // sessão (cookie `sid`). Falha aqui não bloqueia a listagem de candidatos.
+  const carregarElegiveis = useCallback(async () => {
+    try {
+      const res = await fetch("/api/matricula/elegiveis", {
+        cache: "no-store",
+      });
+      if (!res.ok) return;
+      const data = (await res.json()) as
+        | { ok: true; candidatos: CandidatoElegivelMatricula[] }
+        | { ok: false };
+      if (!data.ok) return;
+      const mapa: Record<string, CandidatoElegivelMatricula> = {};
+      for (const c of data.candidatos) {
+        mapa[`${c.idps ?? "x"}-${c.numeroInscricao ?? "x"}`] = c;
+      }
+      setElegiveisMat(mapa);
     } catch {
-      setErro("Não foi possível carregar seus candidatos agora.");
-    } finally {
-      setCarregando(false);
-      setAtualizando(false);
+      // silencioso: a elegibilidade é um complemento, não um requisito.
     }
   }, []);
 
   useEffect(() => {
     void carregar();
-  }, [carregar]);
+    void carregarElegiveis();
+  }, [carregar, carregarElegiveis]);
+
+  // Para cada candidato elegível, verifica na WebAPI se a matrícula JÁ foi feita
+  // (RA no Educacional). Persistente: mantém o card em "concluída" após recarga,
+  // mesmo sem o resumo de sessão. Falha por candidato é silenciosa.
+  useEffect(() => {
+    const chaves = Object.keys(elegiveisMat);
+    if (chaves.length === 0) return;
+    let ativo = true;
+    (async () => {
+      for (const chave of chaves) {
+        const c = elegiveisMat[chave];
+        if (c?.numeroInscricao == null || c?.idps == null) continue;
+        try {
+          const q = new URLSearchParams({
+            numeroInscricao: String(c.numeroInscricao),
+            idps: String(c.idps),
+          });
+          const res = await fetch(`/api/matricula/status?${q.toString()}`, {
+            cache: "no-store",
+          });
+          if (!res.ok) continue;
+          const data = (await res.json()) as
+            | { ok: true; jaMatriculado: boolean }
+            | { ok: false };
+          if (ativo && data.ok && data.jaMatriculado) {
+            setJaMatriculado((m) => ({ ...m, [chave]: true }));
+          }
+        } catch {
+          // silencioso: a situação da matrícula é complementar à listagem.
+        }
+      }
+    })();
+    return () => {
+      ativo = false;
+    };
+  }, [elegiveisMat]);
 
   // Fecha o drawer de detalhes e limpa erros transitórios de download. Anima a
   // saída (translate) e só desmonta após a transição (~300ms).
@@ -490,6 +597,15 @@ export function PainelResponsavel({
       setBaixandoComprovante(false);
     }
   }
+
+  // Abre o preenchimento da matrícula em tela cheia: fecha o drawer (restaura o
+  // scroll do body via cleanup do efeito de `selecionado`) e troca o painel.
+  function iniciarMatricula(dep: Dependente, codUsuarioPS: number) {
+    setDrawerAberto(false);
+    setSelecionado(null);
+    setMatriculando({ dep, codUsuarioPS });
+  }
+
   if (inscrevendo) {
     return (
       <WizardInscricao
@@ -500,6 +616,59 @@ export function PainelResponsavel({
           void carregar();
         }}
       />
+    );
+  }
+
+  // Preenchimento da matrícula em TELA CHEIA (assistente multi-etapas), como a
+  // inscrição. O drawer serve só para conferência; ao "Continuar para matrícula"
+  // assumimos o painel inteiro para o formulário ter espaço.
+  if (matriculando) {
+    const { dep, codUsuarioPS } = matriculando;
+    const rotuloPs = rotuloProcesso(dep.nomeProcesso);
+    return (
+      <div className="space-y-4">
+        <button
+          type="button"
+          onClick={() => setMatriculando(null)}
+          className="inline-flex items-center gap-1 text-sm font-medium text-csa-azul hover:underline"
+        >
+          <span aria-hidden>←</span> Voltar aos candidatos
+        </button>
+
+        <div className="rounded-lg bg-csa-dourado/10 px-4 py-3 ring-1 ring-inset ring-csa-dourado/30">
+          <p className="text-base font-semibold text-csa-azul">
+            Matrícula de {dep.nome}
+          </p>
+          {rotuloPs && (
+            <p className="text-sm font-medium text-csa-azul">{rotuloPs}</p>
+          )}
+          {dep.numeroInscricao && (
+            <p className="text-sm text-cinza-suave">
+              Inscrição nº {dep.numeroInscricao}
+            </p>
+          )}
+        </div>
+
+        <BlocoMatriculaCandidato
+          candidato={{
+            codUsuarioPS,
+            nome: dep.nome,
+            numeroInscricao: dep.numeroInscricao,
+            idps: dep.idps,
+          }}
+          onConcluir={(resumo) => {
+            const chave = chaveDep(dep);
+            if (resumo) {
+              setResumosMatricula((m) => ({ ...m, [chave]: resumo }));
+            }
+            setJaMatriculado((m) => ({ ...m, [chave]: true }));
+            setMatriculando(null);
+            void carregar();
+            void carregarElegiveis();
+          }}
+          onSessaoExpirada={onSessaoExpirada}
+        />
+      </div>
     );
   }
 
@@ -532,6 +701,14 @@ export function PainelResponsavel({
             const rotuloPs = rotuloProcesso(d.nomeProcesso);
             const atencoes = d.atencoes ?? [];
             const temAtencao = atencoes.length > 0;
+            const elegivelMat = d.numeroInscricao
+              ? elegiveisMat[chave]
+              : undefined;
+            const matriculado =
+              d.numeroInscricao != null && jaMatriculado[chave] === true;
+            const resumoMat = d.numeroInscricao
+              ? resumosMatricula[chave]
+              : undefined;
             return (
               <li
                 key={`${d.idUsuario ?? "x"}-${chave}-${i}`}
@@ -597,8 +774,44 @@ export function PainelResponsavel({
                     )}
                   </div>
                   {d.numeroInscricao &&
-                    (d.situacaoDescricao || d.pagamento) && (
+                    (d.situacaoDescricao ||
+                      d.pagamento ||
+                      elegivelMat ||
+                      matriculado) && (
                       <div className="flex flex-wrap items-center justify-center gap-2">
+                        {matriculado ? (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-600/20">
+                            <svg
+                              xmlns="http://www.w3.org/2000/svg"
+                              viewBox="0 0 20 20"
+                              fill="currentColor"
+                              className="h-3.5 w-3.5"
+                              aria-hidden="true"
+                            >
+                              <path
+                                fillRule="evenodd"
+                                d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z"
+                                clipRule="evenodd"
+                              />
+                            </svg>
+                            Matrícula concluída
+                          </span>
+                        ) : (
+                          elegivelMat && (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-csa-dourado/20 px-2 py-0.5 text-xs font-semibold text-csa-azul ring-1 ring-inset ring-csa-dourado/40">
+                              <svg
+                                xmlns="http://www.w3.org/2000/svg"
+                                viewBox="0 0 20 20"
+                                fill="currentColor"
+                                className="h-3.5 w-3.5"
+                                aria-hidden="true"
+                              >
+                                <path d="M9.664 1.319a.75.75 0 0 1 .672 0 41.06 41.06 0 0 1 8.198 5.424.75.75 0 0 1-.254 1.285 31.372 31.372 0 0 0-7.86 3.83.75.75 0 0 1-.84 0 31.508 31.508 0 0 0-2.08-1.287V9.394c0-.244.116-.463.302-.592a35.504 35.504 0 0 1 3.305-2.033.75.75 0 0 0-.714-1.319 37 37 0 0 0-3.446 2.12A2.216 2.216 0 0 0 6 9.393v.38a31.293 31.293 0 0 0-4.28-1.746.75.75 0 0 1-.254-1.285 41.059 41.059 0 0 1 8.198-5.424ZM6 11.459a29.848 29.848 0 0 0-2.455-1.158 41.029 41.029 0 0 0-.39 3.114.75.75 0 0 0 .419.74c.528.256 1.046.53 1.554.82-.21.324-.455.63-.739.914a.75.75 0 1 0 1.06 1.06c.37-.369.69-.77.96-1.193a26.61 26.61 0 0 1 3.095 2.348.75.75 0 0 0 .992 0 26.547 26.547 0 0 1 5.93-3.95.75.75 0 0 0 .42-.739 41.053 41.053 0 0 0-.39-3.114 29.925 29.925 0 0 0-5.199 2.801 2.25 2.25 0 0 1-2.514 0c-.41-.275-.826-.541-1.25-.797a29.7 29.7 0 0 0-.998-.586V11.46Z" />
+                              </svg>
+                              Matrícula disponível
+                            </span>
+                          )
+                        )}
                         {d.situacaoDescricao && (
                           <span
                             className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${classesSituacao(
@@ -715,269 +928,301 @@ export function PainelResponsavel({
                         </button>
                       </div>
                       <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
-                        <div className="space-y-2 rounded-lg bg-areia px-3 py-3">
-                          <p className="font-medium text-grafite">
-                            Boleto da taxa de inscrição
-                          </p>
-                          {d.pagamento?.pago ? (
-                            <p className="text-xs font-medium text-emerald-700">
-                              Pagamento confirmado
-                              {formatarDataBr(d.pagamento.dataPagamento)
-                                ? ` em ${formatarDataBr(d.pagamento.dataPagamento)}`
-                                : ""}
-                              {formatarBrl(
-                                d.pagamento.valorPago ??
-                                  d.pagamento.valorOriginal,
-                              )
-                                ? ` — ${formatarBrl(
-                                    d.pagamento.valorPago ??
-                                      d.pagamento.valorOriginal,
-                                  )}`
-                                : ""}
-                              .
-                            </p>
-                          ) : d.pagamento?.dataVencimento &&
-                            formatarDataBr(d.pagamento.dataVencimento) ? (
-                            <p className="text-xs text-cinza-suave">
-                              Vencimento:{" "}
-                              {formatarDataBr(d.pagamento.dataVencimento)}
-                            </p>
-                          ) : null}
-                          {/* Pagamento confirmado: não faz sentido oferecer 2ª via
-                             nem o fallback de "boleto sendo gerado". Só exibimos a
-                             confirmação acima. */}
-                          {!d.pagamento?.pago &&
-                            (boleto === "carregando" ? (
-                              <p className="text-cinza-suave">
-                                Carregando boleto…
-                              </p>
-                            ) : boleto && boleto !== "erro" ? (
-                              boleto.temPdf && boleto.idBoleto ? (
-                                <>
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      baixarBoletoPdf(boleto.idBoleto!)
-                                    }
-                                    disabled={baixandoPdf}
-                                    className={botaoBoleto}
-                                  >
-                                    {baixandoPdf
-                                      ? "Gerando boleto…"
-                                      : "Baixar boleto (PDF)"}
-                                  </button>
-                                  {erroPdf && (
-                                    <p className="text-xs text-csa-vermelho">
-                                      {erroPdf}
-                                    </p>
-                                  )}
-                                </>
-                              ) : boleto.urlBoletoFixo ? (
-                                <a
-                                  href={boleto.urlBoletoFixo}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className={botaoBoleto}
-                                >
-                                  Abrir boleto
-                                </a>
-                              ) : (
-                                <p className="text-cinza-suave">
-                                  Boleto indisponível no momento. Você poderá
-                                  emiti-lo depois na central do candidato.
-                                </p>
-                              )
-                            ) : (
-                              <div className="space-y-2">
-                                <p className="text-cinza-suave">
-                                  O boleto ainda está sendo gerado. Tente
-                                  atualizar em instantes.
-                                </p>
-                                <button
-                                  type="button"
-                                  onClick={() => carregarBoleto(d)}
-                                  className={botaoSecundario}
-                                >
-                                  Atualizar boleto
-                                </button>
-                              </div>
-                            ))}
-                        </div>
-
-                        <div className="space-y-2 rounded-lg bg-areia px-3 py-3">
-                          <p className="font-medium text-grafite">
-                            Comprovante de inscrição
-                          </p>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              baixarComprovante(d.numeroInscricao!, d.idps)
-                            }
-                            disabled={baixandoComprovante}
-                            className={botaoBoleto}
-                          >
-                            {baixandoComprovante
-                              ? "Gerando comprovante…"
-                              : "Baixar comprovante (PDF)"}
-                          </button>
-                          {erroComprovante && (
-                            <p className="text-xs text-csa-vermelho">
-                              {erroComprovante}
-                            </p>
+                        <>
+                          {matriculado && (
+                            <DetalhesMatricula
+                              numeroInscricao={d.numeroInscricao}
+                              idps={d.idps}
+                              resumo={resumoMat}
+                            />
                           )}
-                        </div>
-
-                        <div className="space-y-2 rounded-lg bg-areia px-3 py-3">
-                          <p className="font-medium text-grafite">Documentos</p>
-                          {docs === "carregando" ? (
-                            <p className="text-cinza-suave">
-                              Carregando documentos…
-                            </p>
-                          ) : docs === "erro" ? (
-                            <div className="space-y-2">
-                              <p className="text-cinza-suave">
-                                Não foi possível carregar os documentos agora.
+                          {elegivelMat && !matriculado && (
+                            <div className="space-y-2 rounded-lg bg-csa-dourado/10 px-3 py-3 ring-1 ring-inset ring-csa-dourado/30">
+                              <p className="font-semibold text-csa-azul">
+                                Matrícula disponível
+                              </p>
+                              <p className="text-xs text-cinza-suave">
+                                O candidato foi convocado. Você pode concluir a
+                                matrícula agora, sem fazer um novo login.
                               </p>
                               <button
                                 type="button"
-                                onClick={() => void carregarDocumentos(d)}
-                                className={botaoSecundario}
+                                onClick={() =>
+                                  iniciarMatricula(d, elegivelMat.codUsuarioPS)
+                                }
+                                className={botaoPrimario}
                               >
-                                Tentar novamente
+                                Continuar para matrícula
                               </button>
                             </div>
-                          ) : Array.isArray(docs) && docs.length > 0 ? (
-                            <ul className="space-y-2">
-                              {docs.map((doc, di) => {
-                                const chaveDoc = `${chave}|${doc.descricao}`;
-                                const enviando = enviandoDoc[chaveDoc];
-                                const erroEnvio = erroDoc[chaveDoc];
-                                // Documento OPCIONAL ainda sem arquivo não é
-                                // "pendência": mostramos "Opcional" (neutro) para não
-                                // dar impressão de obrigação.
-                                const est =
-                                  !doc.obrigatorio &&
-                                  doc.situacao === "pendente"
-                                    ? {
-                                        texto: "Opcional",
-                                        classes:
-                                          "bg-black/5 text-cinza-suave ring-black/10",
-                                      }
-                                    : situacaoDoc[doc.situacao];
-                                return (
-                                  <li
-                                    key={`${doc.codDocumento ?? "d"}-${di}`}
-                                    className="rounded-lg border border-black/10 bg-white px-3 py-2"
-                                  >
-                                    <div className="flex items-start justify-between gap-2">
-                                      <p className="font-medium text-grafite">
-                                        {doc.descricao.replace(
-                                          /^\s*\(\*\)\s*/,
-                                          "",
-                                        )}
-                                        {doc.obrigatorio && (
-                                          <span className="text-csa-vermelho">
-                                            {" "}
-                                            *
-                                          </span>
-                                        )}
-                                      </p>
-                                      <span
-                                        className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${est.classes}`}
-                                      >
-                                        {est.texto}
-                                      </span>
-                                    </div>
-
-                                    {doc.observacao && (
-                                      <div className="mt-2 rounded-md border-l-4 border-amber-400 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                                        <span className="font-semibold">
-                                          Observação da secretaria:
-                                        </span>{" "}
-                                        {doc.observacao}
-                                      </div>
-                                    )}
-
-                                    {doc.nomeArquivo && doc.chaveDownload && (
-                                      <button
-                                        type="button"
-                                        onClick={() =>
-                                          void baixarDocumento(
-                                            doc.chaveDownload!,
-                                            doc.nomeArquivo!,
-                                          )
-                                        }
-                                        className="mt-1 block w-full text-center text-xs font-medium text-csa-azul underline underline-offset-2"
-                                      >
-                                        Baixar arquivo enviado (
-                                        {doc.nomeArquivo})
-                                      </button>
-                                    )}
-
-                                    {doc.podeSubstituir ? (
-                                      <div className="mt-2 text-center">
-                                        <label className="inline-flex cursor-pointer items-center gap-2 text-xs font-medium text-csa-azul">
-                                          <span className="rounded-full border border-csa-azul/30 px-3 py-1 transition hover:bg-csa-azul/5">
-                                            {enviando
-                                              ? "Enviando…"
-                                              : doc.nomeArquivo
-                                                ? "Substituir arquivo"
-                                                : "Enviar arquivo"}
-                                          </span>
-                                          <input
-                                            type="file"
-                                            className="hidden"
-                                            disabled={enviando}
-                                            onChange={(e) => {
-                                              const file = e.target.files?.[0];
-                                              if (file)
-                                                void substituirDoc(
-                                                  d,
-                                                  doc.descricao,
-                                                  file,
-                                                );
-                                              e.target.value = "";
-                                            }}
-                                          />
-                                        </label>
-                                        {erroEnvio && (
-                                          <p className="mt-1 text-xs text-csa-vermelho">
-                                            {erroEnvio}
-                                          </p>
-                                        )}
-                                      </div>
-                                    ) : (
-                                      <p className="mt-1 text-xs text-cinza-suave">
-                                        Documento conferido pela secretaria —
-                                        não pode ser substituído.
-                                      </p>
-                                    )}
-                                  </li>
-                                );
-                              })}
-                            </ul>
-                          ) : (
-                            <p className="text-cinza-suave">
-                              Nenhum documento a exibir para esta inscrição.
-                            </p>
                           )}
-                        </div>
-
-                        {d.codPrograma && (
                           <div className="space-y-2 rounded-lg bg-areia px-3 py-3">
                             <p className="font-medium text-grafite">
-                              Programação das avaliações
+                              Boleto da taxa de inscrição
                             </p>
-                            <a
-                              href={`/api/programas/${d.codPrograma}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
+                            {d.pagamento?.pago ? (
+                              <p className="text-xs font-medium text-emerald-700">
+                                Pagamento confirmado
+                                {formatarDataBr(d.pagamento.dataPagamento)
+                                  ? ` em ${formatarDataBr(d.pagamento.dataPagamento)}`
+                                  : ""}
+                                {formatarBrl(
+                                  d.pagamento.valorPago ??
+                                    d.pagamento.valorOriginal,
+                                )
+                                  ? ` — ${formatarBrl(
+                                      d.pagamento.valorPago ??
+                                        d.pagamento.valorOriginal,
+                                    )}`
+                                  : ""}
+                                .
+                              </p>
+                            ) : d.pagamento?.dataVencimento &&
+                              formatarDataBr(d.pagamento.dataVencimento) ? (
+                              <p className="text-xs text-cinza-suave">
+                                Vencimento:{" "}
+                                {formatarDataBr(d.pagamento.dataVencimento)}
+                              </p>
+                            ) : null}
+                            {/* Pagamento confirmado: não faz sentido oferecer 2ª via
+                             nem o fallback de "boleto sendo gerado". Só exibimos a
+                             confirmação acima. */}
+                            {!d.pagamento?.pago &&
+                              (boleto === "carregando" ? (
+                                <p className="text-cinza-suave">
+                                  Carregando boleto…
+                                </p>
+                              ) : boleto && boleto !== "erro" ? (
+                                boleto.temPdf && boleto.idBoleto ? (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        baixarBoletoPdf(boleto.idBoleto!)
+                                      }
+                                      disabled={baixandoPdf}
+                                      className={botaoBoleto}
+                                    >
+                                      {baixandoPdf
+                                        ? "Gerando boleto…"
+                                        : "Baixar boleto (PDF)"}
+                                    </button>
+                                    {erroPdf && (
+                                      <p className="text-xs text-csa-vermelho">
+                                        {erroPdf}
+                                      </p>
+                                    )}
+                                  </>
+                                ) : boleto.urlBoletoFixo ? (
+                                  <a
+                                    href={boleto.urlBoletoFixo}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className={botaoBoleto}
+                                  >
+                                    Abrir boleto
+                                  </a>
+                                ) : (
+                                  <p className="text-cinza-suave">
+                                    Boleto indisponível no momento. Você poderá
+                                    emiti-lo depois na central do candidato.
+                                  </p>
+                                )
+                              ) : (
+                                <div className="space-y-2">
+                                  <p className="text-cinza-suave">
+                                    O boleto ainda está sendo gerado. Tente
+                                    atualizar em instantes.
+                                  </p>
+                                  <button
+                                    type="button"
+                                    onClick={() => carregarBoleto(d)}
+                                    className={botaoSecundario}
+                                  >
+                                    Atualizar boleto
+                                  </button>
+                                </div>
+                              ))}
+                          </div>
+
+                          <div className="space-y-2 rounded-lg bg-areia px-3 py-3">
+                            <p className="font-medium text-grafite">
+                              Comprovante de inscrição
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                baixarComprovante(d.numeroInscricao!, d.idps)
+                              }
+                              disabled={baixandoComprovante}
                               className={botaoBoleto}
                             >
-                              Baixar programação (PDF)
-                            </a>
+                              {baixandoComprovante
+                                ? "Gerando comprovante…"
+                                : "Baixar comprovante (PDF)"}
+                            </button>
+                            {erroComprovante && (
+                              <p className="text-xs text-csa-vermelho">
+                                {erroComprovante}
+                              </p>
+                            )}
                           </div>
-                        )}
+
+                          <div className="space-y-2 rounded-lg bg-areia px-3 py-3">
+                            <p className="font-medium text-grafite">
+                              Documentos
+                            </p>
+                            {docs === "carregando" ? (
+                              <p className="text-cinza-suave">
+                                Carregando documentos…
+                              </p>
+                            ) : docs === "erro" ? (
+                              <div className="space-y-2">
+                                <p className="text-cinza-suave">
+                                  Não foi possível carregar os documentos agora.
+                                </p>
+                                <button
+                                  type="button"
+                                  onClick={() => void carregarDocumentos(d)}
+                                  className={botaoSecundario}
+                                >
+                                  Tentar novamente
+                                </button>
+                              </div>
+                            ) : Array.isArray(docs) && docs.length > 0 ? (
+                              <ul className="space-y-2">
+                                {docs.map((doc, di) => {
+                                  const chaveDoc = `${chave}|${doc.descricao}`;
+                                  const enviando = enviandoDoc[chaveDoc];
+                                  const erroEnvio = erroDoc[chaveDoc];
+                                  // Documento OPCIONAL ainda sem arquivo não é
+                                  // "pendência": mostramos "Opcional" (neutro) para não
+                                  // dar impressão de obrigação.
+                                  const est =
+                                    !doc.obrigatorio &&
+                                    doc.situacao === "pendente"
+                                      ? {
+                                          texto: "Opcional",
+                                          classes:
+                                            "bg-black/5 text-cinza-suave ring-black/10",
+                                        }
+                                      : situacaoDoc[doc.situacao];
+                                  return (
+                                    <li
+                                      key={`${doc.codDocumento ?? "d"}-${di}`}
+                                      className="rounded-lg border border-black/10 bg-white px-3 py-2"
+                                    >
+                                      <div className="flex items-start justify-between gap-2">
+                                        <p className="font-medium text-grafite">
+                                          {doc.descricao.replace(
+                                            /^\s*\(\*\)\s*/,
+                                            "",
+                                          )}
+                                          {doc.obrigatorio && (
+                                            <span className="text-csa-vermelho">
+                                              {" "}
+                                              *
+                                            </span>
+                                          )}
+                                        </p>
+                                        <span
+                                          className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${est.classes}`}
+                                        >
+                                          {est.texto}
+                                        </span>
+                                      </div>
+
+                                      {doc.observacao && (
+                                        <div className="mt-2 rounded-md border-l-4 border-amber-400 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                                          <span className="font-semibold">
+                                            Observação da secretaria:
+                                          </span>{" "}
+                                          {doc.observacao}
+                                        </div>
+                                      )}
+
+                                      {doc.nomeArquivo && doc.chaveDownload && (
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            void baixarDocumento(
+                                              doc.chaveDownload!,
+                                              doc.nomeArquivo!,
+                                            )
+                                          }
+                                          className="mt-1 block w-full text-center text-xs font-medium text-csa-azul underline underline-offset-2"
+                                        >
+                                          Baixar arquivo enviado (
+                                          {doc.nomeArquivo})
+                                        </button>
+                                      )}
+
+                                      {doc.podeSubstituir ? (
+                                        <div className="mt-2 text-center">
+                                          <label className="inline-flex cursor-pointer items-center gap-2 text-xs font-medium text-csa-azul">
+                                            <span className="rounded-full border border-csa-azul/30 px-3 py-1 transition hover:bg-csa-azul/5">
+                                              {enviando
+                                                ? "Enviando…"
+                                                : doc.nomeArquivo
+                                                  ? "Substituir arquivo"
+                                                  : "Enviar arquivo"}
+                                            </span>
+                                            <input
+                                              type="file"
+                                              className="hidden"
+                                              disabled={enviando}
+                                              onChange={(e) => {
+                                                const file =
+                                                  e.target.files?.[0];
+                                                if (file)
+                                                  void substituirDoc(
+                                                    d,
+                                                    doc.descricao,
+                                                    file,
+                                                  );
+                                                e.target.value = "";
+                                              }}
+                                            />
+                                          </label>
+                                          {erroEnvio && (
+                                            <p className="mt-1 text-xs text-csa-vermelho">
+                                              {erroEnvio}
+                                            </p>
+                                          )}
+                                        </div>
+                                      ) : (
+                                        <p className="mt-1 text-xs text-cinza-suave">
+                                          Documento conferido pela secretaria —
+                                          não pode ser substituído.
+                                        </p>
+                                      )}
+                                    </li>
+                                  );
+                                })}
+                              </ul>
+                            ) : (
+                              <p className="text-cinza-suave">
+                                Nenhum documento a exibir para esta inscrição.
+                              </p>
+                            )}
+                          </div>
+
+                          {d.codPrograma && (
+                            <div className="space-y-2 rounded-lg bg-areia px-3 py-3">
+                              <p className="font-medium text-grafite">
+                                Programação das avaliações
+                              </p>
+                              <a
+                                href={`/api/programas/${d.codPrograma}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className={botaoBoleto}
+                              >
+                                Baixar programação (PDF)
+                              </a>
+                            </div>
+                          )}
+                        </>
                       </div>
                     </aside>
                   </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { CpfInput } from "@/components/CpfInput";
 import { PainelResponsavel } from "@/components/PainelResponsavel";
 import { WizardInscricao } from "@/components/WizardInscricao";
@@ -15,7 +15,7 @@ type Reconhecimento = {
   emailMascarado: string | null;
 };
 
-type Etapa = "cpf" | "login" | "recuperar" | "novo" | "logado";
+type Etapa = "verificando" | "cpf" | "login" | "recuperar" | "novo" | "logado";
 
 /** Máscara leve de data dd/mm/aaaa para os campos de nascimento. */
 function formatarData(valor: string): string {
@@ -31,8 +31,14 @@ function formatarData(valor: string): string {
  * para login (senha / data de nascimento) ou cadastro novo. Login e recuperação
  * de senha passam pela WebAPI EduPS via BFF; o reconhecimento é leitura (SQL).
  */
-export function ReconhecimentoForm({ idps }: { idps: number }) {
-  const [etapa, setEtapa] = useState<Etapa>("cpf");
+export function ReconhecimentoForm({
+  idps,
+  onLogadoChange,
+}: {
+  idps: number;
+  onLogadoChange?: (logado: boolean) => void;
+}) {
+  const [etapa, setEtapa] = useState<Etapa>("verificando");
   const [cpf, setCpf] = useState("");
   const [reconh, setReconh] = useState<Reconhecimento | null>(null);
   const [senha, setSenha] = useState("");
@@ -51,6 +57,48 @@ export function ReconhecimentoForm({ idps }: { idps: number }) {
   const [cadastroIniciado, setCadastroIniciado] = useState(false);
 
   const cpfOk = cpfValido(cpf);
+
+  // Informa o container se o responsável já está logado, para ele esconder o
+  // cabeçalho de acesso (título + instrução do CPF) fora da etapa de login.
+  useEffect(() => {
+    onLogadoChange?.(etapa === "logado");
+  }, [etapa, onLogadoChange]);
+
+  // Restaura o estado logado a partir da sessão (cookie `sid`) no mount. Sem
+  // isso, ao navegar para outra página do topo e voltar para /inscricoes o
+  // React reinicia em "cpf" e força novo login, mesmo com a sessão válida.
+  useEffect(() => {
+    let ativo = true;
+    (async () => {
+      try {
+        const res = await fetch("/api/auth/me", { cache: "no-store" });
+        if (!ativo) return;
+        if (res.ok) {
+          const data = (await res.json()) as {
+            ok: boolean;
+            nome?: string | null;
+          };
+          if (data.ok) {
+            setReconh({
+              existe: true,
+              temSenhaCadastrada: true,
+              ehResponsavelDeAluno: false,
+              nome: data.nome ?? null,
+              emailMascarado: null,
+            });
+            setEtapa("logado");
+            return;
+          }
+        }
+        setEtapa("cpf");
+      } catch {
+        if (ativo) setEtapa("cpf");
+      }
+    })();
+    return () => {
+      ativo = false;
+    };
+  }, []);
 
   async function consultarCpf(e: React.FormEvent) {
     e.preventDefault();
@@ -183,6 +231,22 @@ export function ReconhecimentoForm({ idps }: { idps: number }) {
       // logout é best-effort; o cookie de sessão expira sozinho em 30 min.
     }
     recomecar();
+  }
+
+  // Sessão expirada (401 em qualquer painel): volta ao login por CPF com um
+  // aviso — em vez de oferecer um "tentar novamente" que sempre falharia.
+  function sessaoExpirada() {
+    recomecar();
+    setErro("Sua sessão expirou. Entre novamente com seu CPF.");
+  }
+
+  // ---- Etapa: verificando sessão -------------------------------------------
+  if (etapa === "verificando") {
+    return (
+      <p className="text-sm text-cinza-suave" aria-live="polite">
+        Verificando sua sessão…
+      </p>
+    );
   }
 
   // ---- Etapa: CPF -----------------------------------------------------------
@@ -513,6 +577,7 @@ export function ReconhecimentoForm({ idps }: { idps: number }) {
       idps={idps}
       responsavelNome={reconh?.nome ?? (novoNome.trim() || "responsável")}
       onSair={() => void sair()}
+      onSessaoExpirada={sessaoExpirada}
     />
   );
 }
