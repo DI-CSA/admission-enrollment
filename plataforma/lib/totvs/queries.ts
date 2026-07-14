@@ -1037,3 +1037,118 @@ function dataParaIso(v: Date | string | null | undefined): string | null {
   const d = v instanceof Date ? v : new Date(v);
   return Number.isNaN(d.getTime()) ? null : d.toISOString();
 }
+
+// ---------------------------------------------------------------------------
+// Conciliação da PRÉ-MATRÍCULA (boleto de reserva de matrícula, R$2.200)
+// ---------------------------------------------------------------------------
+
+/**
+ * Matrícula do ciclo atual (candidato já matriculado: SPSINSCRICAOAREAOFERTADA.RAMAT
+ * preenchido) com o estado do BOLETO DE RESERVA (título FLAN de ~R$2.200).
+ * O job de conciliação usa isto para avançar a negociação no RD Station CRM:
+ *   - reserva GERADA (STATUSLAN=0) → etapa "Cadastro de matrícula";
+ *   - reserva PAGA   (STATUSLAN=1) → etapa "Pré-matrícula".
+ */
+export interface MatriculaReservaConciliar {
+  numeroInscricao: number;
+  idps: number;
+  codColigada: number;
+  /** RA do aluno gerado pela matrícula. */
+  ra: string | null;
+  /** IDLAN da TAXA de inscrição — CHAVE de reconciliação (casa com o `[LAN:]` do deal). */
+  idLan: number | null;
+  /** IDLAN do título da RESERVA de matrícula (R$2.200). */
+  reservaIdLan: number | null;
+  /** STATUSLAN da reserva: 0 = gerada/aberta, 1 = paga/baixada. */
+  reservaStatusLan: number | null;
+  /** Valor original da reserva (esperado ~2200). */
+  reservaValor: number | null;
+  /** Data da baixa da reserva (ISO) — quando o boleto de reserva foi pago. */
+  reservaDataPagamento: string | null;
+  nomeCandidato: string | null;
+  emailResponsavel: string | null;
+  nomeResponsavel: string | null;
+}
+
+interface MatriculaReservaRow {
+  NUMEROINSCRICAO: number;
+  IDPS: number;
+  CODCOLIGADA: number;
+  RA: string | null;
+  IDLAN: number | null;
+  RESERVA_IDLAN: number | null;
+  RESERVA_STATUS: number | null;
+  RESERVA_VALOR: number | null;
+  RESERVA_BAIXA: Date | string | null;
+  NOMECANDIDATO: string | null;
+  EMAILRESP: string | null;
+  NOMERESP: string | null;
+}
+
+/**
+ * Lista as matrículas do ciclo atual (RAMAT preenchido) com o estado do boleto
+ * de reserva de matrícula. A reserva é o título financeiro do aluno localizado
+ * por RAMAT → SPARCELA → SLAN → FLAN; entre os títulos, pega o de vencimento
+ * mais antigo (a ENTRADA/reserva de R$2.200). Retorna o STATUSLAN para o job de
+ * conciliação decidir a etapa do funil (Cadastro de matrícula vs. Pré-matrícula).
+ *
+ * A chave de reconciliação com o deal continua sendo o IDLAN da TAXA de inscrição
+ * (`i.IDLAN`), o mesmo `[LAN:<idlan>]` embutido no nome da negociação.
+ */
+export async function listarMatriculasParaConciliarReserva(): Promise<
+  MatriculaReservaConciliar[]
+> {
+  const anoAtual = process.env.PS_ANO_ATUAL?.trim() || String(ANO_PROCESSO);
+  const rows = await query<MatriculaReservaRow>(
+    `
+SELECT i.NUMEROINSCRICAO, i.IDPS, i.CODCOLIGADA,
+       i.RAMAT AS RA,
+       i.IDLAN,
+       res.IDLAN AS RESERVA_IDLAN,
+       res.STATUSLAN AS RESERVA_STATUS,
+       res.VALORORIGINAL AS RESERVA_VALOR,
+       res.DATABAIXA AS RESERVA_BAIXA,
+       u.NOME AS NOMECANDIDATO,
+       resp.NOME AS NOMERESP,
+       resp.EMAIL AS EMAILRESP
+  FROM SPSINSCRICAOAREAOFERTADA i
+  JOIN SPSPROCESSOSELETIVO ps ON ps.CODCOLIGADA = i.CODCOLIGADA AND ps.IDPS = i.IDPS
+  JOIN SPSUSUARIO u ON u.CODUSUARIOPS = i.CODUSUARIOPS
+  OUTER APPLY (
+    SELECT TOP 1 l.IDLAN, l.STATUSLAN, l.VALORORIGINAL, l.DATABAIXA
+      FROM SPARCELA p
+      JOIN SLAN s ON s.CODCOLIGADA = p.CODCOLIGADA AND s.IDPARCELA = p.IDPARCELA
+      JOIN FLAN l ON l.CODCOLIGADA = s.CODCOLIGADA AND l.IDLAN = s.IDLAN
+     WHERE p.RA = i.RAMAT
+     ORDER BY l.DATAVENCIMENTO ASC, l.IDLAN ASC
+  ) res
+  OUTER APPLY (
+    SELECT TOP 1 ru.NOME, ru.EMAIL
+      FROM SPSUSUARIOTIPORELAC r
+      JOIN SPSUSUARIO ru ON ru.CODUSUARIOPS = r.CODUSUARIOTIPORELAC
+     WHERE r.CODUSUARIOPS = i.CODUSUARIOPS
+       AND r.TIPORELAC = 5
+       AND r.CODUSUARIOPS <> r.CODUSUARIOTIPORELAC
+       AND ru.EMAIL IS NOT NULL AND LTRIM(RTRIM(ru.EMAIL)) <> ''
+     ORDER BY ru.CODUSUARIOPS DESC
+  ) resp
+ WHERE ps.NOME LIKE @ano AND i.RAMAT IS NOT NULL
+ ORDER BY i.NUMEROINSCRICAO`,
+    { ano: `%${anoAtual}%` },
+  );
+
+  return rows.map((r) => ({
+    numeroInscricao: r.NUMEROINSCRICAO,
+    idps: r.IDPS,
+    codColigada: r.CODCOLIGADA,
+    ra: r.RA?.trim() ?? null,
+    idLan: r.IDLAN ?? null,
+    reservaIdLan: r.RESERVA_IDLAN ?? null,
+    reservaStatusLan: r.RESERVA_STATUS ?? null,
+    reservaValor: r.RESERVA_VALOR ?? null,
+    reservaDataPagamento: dataParaIso(r.RESERVA_BAIXA),
+    nomeCandidato: r.NOMECANDIDATO?.trim() ?? null,
+    emailResponsavel: r.EMAILRESP?.trim() || null,
+    nomeResponsavel: r.NOMERESP?.trim() || null,
+  }));
+}

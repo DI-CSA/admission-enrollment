@@ -20,6 +20,8 @@ cat > "$TMP" <<'CRON'
 # Conciliação de pagamento CSA: avança deals pagos p/ "Taxa paga" no RD CRM.
 SHELL=/bin/bash
 0 8,18 * * * root SECRET="$(sed -n 's/^CRON_SECRET=//p' /etc/csa-portal/.env | head -1)"; curl -fsS -X POST -H "x-cron-secret: $SECRET" http://127.0.0.1:3000/api/jobs/conciliar-pagamentos >> /var/log/csa-conciliar.log 2>&1
+# Conciliação da PRÉ-MATRÍCULA CSA: avança deals p/ "Cadastro de matrícula" (reserva gerada) e "Pré-matrícula" (reserva paga).
+15 8,18 * * * root SECRET="$(sed -n 's/^CRON_SECRET=//p' /etc/csa-portal/.env | head -1)"; curl -fsS -X POST -H "x-cron-secret: $SECRET" http://127.0.0.1:3000/api/jobs/conciliar-matriculas >> /var/log/csa-conciliar.log 2>&1
 CRON
 
 echo "==> 1/2 envia o arquivo de cron para a VM"

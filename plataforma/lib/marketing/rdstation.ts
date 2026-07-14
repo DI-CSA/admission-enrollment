@@ -35,7 +35,9 @@ export type EtapaFunil =
   | "inscricao-iniciada" // clicou "incluir candidato" / iniciou o wizard
   | "area-escolhida" // série/área selecionada
   | "boleto-gerado" // inscrição CONCLUÍDA (taxa gerada / checkout iniciado)
-  | "pagamento-confirmado"; // conversão final
+  | "pagamento-confirmado" // taxa de inscrição paga
+  | "cadastro-matricula" // matrícula efetivada: boleto de reserva (R$2.200) GERADO
+  | "reserva-matricula-paga"; // boleto de reserva pago → pré-matrícula confirmada
 
 export interface EventoFunil {
   etapa: EtapaFunil;
