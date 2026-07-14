@@ -1068,6 +1068,20 @@ export interface MatriculaReservaConciliar {
   nomeCandidato: string | null;
   emailResponsavel: string | null;
   nomeResponsavel: string | null;
+  /** Contatos relacionados ao candidato (enriquecimento do deal no RD CRM). */
+  pai: ContatoRelacionado | null;
+  mae: ContatoRelacionado | null;
+  respFinanceiro: ContatoRelacionado | null;
+  /** Data/hora da efetivação da matrícula (SALUNO.RECCREATEDON), ISO. */
+  dataCadastroMatricula: string | null;
+}
+
+/** Contato de um relacionado (pai/mãe/resp. financeiro) do candidato. */
+export interface ContatoRelacionado {
+  nome: string | null;
+  cpf: string | null;
+  email: string | null;
+  telefone: string | null;
 }
 
 interface MatriculaReservaRow {
@@ -1083,6 +1097,19 @@ interface MatriculaReservaRow {
   NOMECANDIDATO: string | null;
   EMAILRESP: string | null;
   NOMERESP: string | null;
+  CADASTRO_DT: string | null;
+  PAI_NOME: string | null;
+  PAI_CPF: string | null;
+  PAI_EMAIL: string | null;
+  PAI_TEL: string | null;
+  MAE_NOME: string | null;
+  MAE_CPF: string | null;
+  MAE_EMAIL: string | null;
+  MAE_TEL: string | null;
+  RESPFIN_NOME: string | null;
+  RESPFIN_CPF: string | null;
+  RESPFIN_EMAIL: string | null;
+  RESPFIN_TEL: string | null;
 }
 
 /**
@@ -1110,10 +1137,15 @@ SELECT i.NUMEROINSCRICAO, i.IDPS, i.CODCOLIGADA,
        res.DATABAIXA AS RESERVA_BAIXA,
        u.NOME AS NOMECANDIDATO,
        resp.NOME AS NOMERESP,
-       resp.EMAIL AS EMAILRESP
+       resp.EMAIL AS EMAILRESP,
+       CONVERT(varchar(16), al.RECCREATEDON, 120) AS CADASTRO_DT,
+       pai.NOME AS PAI_NOME, pai.CPF AS PAI_CPF, pai.EMAIL AS PAI_EMAIL, pai.TEL AS PAI_TEL,
+       mae.NOME AS MAE_NOME, mae.CPF AS MAE_CPF, mae.EMAIL AS MAE_EMAIL, mae.TEL AS MAE_TEL,
+       rf.NOME AS RESPFIN_NOME, rf.CPF AS RESPFIN_CPF, rf.EMAIL AS RESPFIN_EMAIL, rf.TEL AS RESPFIN_TEL
   FROM SPSINSCRICAOAREAOFERTADA i
   JOIN SPSPROCESSOSELETIVO ps ON ps.CODCOLIGADA = i.CODCOLIGADA AND ps.IDPS = i.IDPS
   JOIN SPSUSUARIO u ON u.CODUSUARIOPS = i.CODUSUARIOPS
+  LEFT JOIN SALUNO al ON al.RA = i.RAMAT
   OUTER APPLY (
     SELECT TOP 1 l.IDLAN, l.STATUSLAN, l.VALORORIGINAL, l.DATABAIXA
       FROM SPARCELA p
@@ -1132,6 +1164,30 @@ SELECT i.NUMEROINSCRICAO, i.IDPS, i.CODCOLIGADA,
        AND ru.EMAIL IS NOT NULL AND LTRIM(RTRIM(ru.EMAIL)) <> ''
      ORDER BY ru.CODUSUARIOPS DESC
   ) resp
+  OUTER APPLY (
+    SELECT TOP 1 ru.NOME, ru.CPF, ru.EMAIL,
+           COALESCE(NULLIF(LTRIM(RTRIM(ru.TELEFONE1)), ''), NULLIF(LTRIM(RTRIM(ru.TELEFONE2)), ''), ru.TELEFONE3) AS TEL
+      FROM SPSUSUARIOTIPORELAC r
+      JOIN SPSUSUARIO ru ON ru.CODUSUARIOPS = r.CODUSUARIOTIPORELAC
+     WHERE r.CODUSUARIOPS = i.CODUSUARIOPS AND r.TIPORELAC = 1
+     ORDER BY ru.CODUSUARIOPS DESC
+  ) pai
+  OUTER APPLY (
+    SELECT TOP 1 ru.NOME, ru.CPF, ru.EMAIL,
+           COALESCE(NULLIF(LTRIM(RTRIM(ru.TELEFONE1)), ''), NULLIF(LTRIM(RTRIM(ru.TELEFONE2)), ''), ru.TELEFONE3) AS TEL
+      FROM SPSUSUARIOTIPORELAC r
+      JOIN SPSUSUARIO ru ON ru.CODUSUARIOPS = r.CODUSUARIOTIPORELAC
+     WHERE r.CODUSUARIOPS = i.CODUSUARIOPS AND r.TIPORELAC = 2
+     ORDER BY ru.CODUSUARIOPS DESC
+  ) mae
+  OUTER APPLY (
+    SELECT TOP 1 ru.NOME, ru.CPF, ru.EMAIL,
+           COALESCE(NULLIF(LTRIM(RTRIM(ru.TELEFONE1)), ''), NULLIF(LTRIM(RTRIM(ru.TELEFONE2)), ''), ru.TELEFONE3) AS TEL
+      FROM SPSUSUARIOTIPORELAC r
+      JOIN SPSUSUARIO ru ON ru.CODUSUARIOPS = r.CODUSUARIOTIPORELAC
+     WHERE r.CODUSUARIOPS = i.CODUSUARIOPS AND r.TIPORELAC = 3
+     ORDER BY ru.CODUSUARIOPS DESC
+  ) rf
  WHERE ps.NOME LIKE @ano AND i.RAMAT IS NOT NULL
  ORDER BY i.NUMEROINSCRICAO`,
     { ano: `%${anoAtual}%` },
@@ -1150,5 +1206,31 @@ SELECT i.NUMEROINSCRICAO, i.IDPS, i.CODCOLIGADA,
     nomeCandidato: r.NOMECANDIDATO?.trim() ?? null,
     emailResponsavel: r.EMAILRESP?.trim() || null,
     nomeResponsavel: r.NOMERESP?.trim() || null,
+    dataCadastroMatricula: r.CADASTRO_DT ? String(r.CADASTRO_DT).trim() : null,
+    pai: montarContato(r.PAI_NOME, r.PAI_CPF, r.PAI_EMAIL, r.PAI_TEL),
+    mae: montarContato(r.MAE_NOME, r.MAE_CPF, r.MAE_EMAIL, r.MAE_TEL),
+    respFinanceiro: montarContato(
+      r.RESPFIN_NOME,
+      r.RESPFIN_CPF,
+      r.RESPFIN_EMAIL,
+      r.RESPFIN_TEL,
+    ),
   }));
+}
+
+/** Monta um ContatoRelacionado; null quando não há nome. */
+function montarContato(
+  nome: string | null,
+  cpf: string | null,
+  email: string | null,
+  telefone: string | null,
+): ContatoRelacionado | null {
+  const n = nome?.trim();
+  if (!n) return null;
+  return {
+    nome: n,
+    cpf: cpf?.replace(/\D/g, "") || null,
+    email: email?.trim() || null,
+    telefone: telefone?.trim() || null,
+  };
 }

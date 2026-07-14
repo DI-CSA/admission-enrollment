@@ -19,6 +19,7 @@ import {
   listarNegociacoesDoFunil,
   moverNegociacaoParaEtapa,
   ajustarValorReservaDeal,
+  atualizarCamposMatriculaDeal,
 } from "@/lib/marketing/rdcrm";
 import { registrarEventoFunil } from "@/lib/marketing/rdstation";
 
@@ -42,6 +43,7 @@ export interface ResultadoConciliacaoMatriculas {
   movidasCadastro: number;
   movidasPre: number;
   valoresAjustados: number;
+  camposAtualizados: number;
   jaAvancadas: number;
   semDeal: number;
   semIdLan: number;
@@ -72,6 +74,7 @@ export async function conciliarMatriculas(
     movidasCadastro: 0,
     movidasPre: 0,
     valoresAjustados: 0,
+    camposAtualizados: 0,
     jaAvancadas: 0,
     semDeal: 0,
     semIdLan: 0,
@@ -180,6 +183,16 @@ export async function conciliarMatriculas(
     ) {
       const okValor = await ajustarValorReservaDeal(deal.id);
       if (okValor) base.valoresAjustados++;
+
+      // Enriquecimento: contatos (pai/mãe/resp. fin) + datas em campos personalizados.
+      const okCampos = await atualizarCamposMatriculaDeal(deal.id, {
+        pai: mat.pai,
+        mae: mat.mae,
+        respFinanceiro: mat.respFinanceiro,
+        dataCadastroMatricula: mat.dataCadastroMatricula,
+        dataPagamentoReserva: mat.reservaDataPagamento,
+      });
+      if (okCampos) base.camposAtualizados++;
     }
   }
 

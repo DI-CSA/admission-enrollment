@@ -532,3 +532,105 @@ export async function ajustarValorReservaDeal(
     return false;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Enriquecimento da matrícula: contatos (pai/mãe/resp. fin) + datas em CAMPOS
+// PERSONALIZADOS da negociação
+// ---------------------------------------------------------------------------
+//
+// A API v1 do CRM NÃO permite adicionar/atualizar CONTATOS num deal existente
+// (POST /deals/{id}/contacts → 404; PUT /deals/{id} ignora `contacts`), mas
+// PERMITE atualizar CAMPOS PERSONALIZADOS via PUT /deals/{id} (deal_custom_fields).
+// Por isso gravamos os dados de contato (nome/CPF/e-mail/telefone) de pai, mãe e
+// responsável financeiro, e as datas de cadastro/pagamento, como campos de texto.
+// Cada campo só é enviado quando seu UUID está configurado no ambiente.
+
+export interface ContatoDeal {
+  nome: string | null;
+  cpf: string | null;
+  email: string | null;
+  telefone: string | null;
+}
+
+export interface EnriquecimentoMatricula {
+  pai: ContatoDeal | null;
+  mae: ContatoDeal | null;
+  respFinanceiro: ContatoDeal | null;
+  /** Data/hora da efetivação da matrícula, formato "yyyy-mm-dd HH:mm". */
+  dataCadastroMatricula: string | null;
+  /** Data do pagamento da reserva (ISO). */
+  dataPagamentoReserva: string | null;
+}
+
+function fmtContatoDeal(c: ContatoDeal | null): string | null {
+  if (!c || !c.nome) return null;
+  const partes = [c.nome];
+  if (c.cpf) partes.push(`CPF ${c.cpf}`);
+  if (c.email) partes.push(c.email);
+  if (c.telefone) partes.push(c.telefone);
+  return partes.join(" · ");
+}
+
+/** "yyyy-mm-dd HH:mm" (ou ISO) → "dd/mm/aaaa HH:mm". */
+function fmtDataHoraBr(s: string | null): string | null {
+  if (!s) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/.exec(s);
+  return m ? `${m[3]}/${m[2]}/${m[1]} ${m[4]}:${m[5]}` : null;
+}
+
+/** ISO/"yyyy-mm-dd…" → "dd/mm/aaaa". */
+function fmtDataBr(s: string | null): string | null {
+  if (!s) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : null;
+}
+
+/**
+ * Grava os campos personalizados de enriquecimento da matrícula na negociação
+ * (PUT /deals/{id} deal_custom_fields). Só envia os campos cujo UUID está no
+ * ambiente (RD_CRM_CF_PAI_ID/_MAE_ID/_RESP_FINANCEIRO_ID/_DATA_CADASTRO_ID/
+ * _DATA_PAGAMENTO_ID). Nunca lança: em falha retorna false e registra log.
+ */
+export async function atualizarCamposMatriculaDeal(
+  dealId: string,
+  dados: EnriquecimentoMatricula,
+): Promise<boolean> {
+  const token = process.env.RD_CRM_TOKEN;
+  if (!token || !dealId) return false;
+  const cf: Array<{ custom_field_id: string; value: string }> = [];
+  const push = (envKey: string, value: string | null) => {
+    const id = process.env[envKey]?.trim();
+    if (id && value) cf.push({ custom_field_id: id, value });
+  };
+  push("RD_CRM_CF_PAI_ID", fmtContatoDeal(dados.pai));
+  push("RD_CRM_CF_MAE_ID", fmtContatoDeal(dados.mae));
+  push("RD_CRM_CF_RESP_FINANCEIRO_ID", fmtContatoDeal(dados.respFinanceiro));
+  push("RD_CRM_CF_DATA_CADASTRO_ID", fmtDataHoraBr(dados.dataCadastroMatricula));
+  push("RD_CRM_CF_DATA_PAGAMENTO_ID", fmtDataBr(dados.dataPagamentoReserva));
+  if (!cf.length) return false;
+  try {
+    const res = await fetch(
+      `${RD_CRM_BASE}/deals/${encodeURIComponent(dealId)}?token=${encodeURIComponent(token)}`,
+      {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({ deal: { deal_custom_fields: cf } }),
+      },
+    );
+    if (!res.ok) {
+      console.warn(
+        "[rdcrm] atualizar campos matrícula não-OK:",
+        res.status,
+        dealId,
+      );
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.warn("[rdcrm] falha ao atualizar campos matrícula:", dealId, e);
+    return false;
+  }
+}
