@@ -1018,7 +1018,10 @@ export function WizardMatricula({
   // Combo "quem é o responsável": o responsável (financeiro/acadêmico) deve ser
   // uma das filiações já cadastradas — só aparecem as filiações cujos dados já
   // foram preenchidos. O valor "" = "Selecione…" (nenhum formulário à mostra).
-  function opcoesResponsavel(): { valor: Papel | "novo" | ""; rotulo: string }[] {
+  function opcoesResponsavel(): {
+    valor: Papel | "novo" | "";
+    rotulo: string;
+  }[] {
     const nomeDe = (p: Papel) => {
       const n = registros[p]?.["NOME"];
       return typeof n === "string" && n.trim() ? ` — ${n.trim()}` : "";
@@ -1047,10 +1050,19 @@ export function WizardMatricula({
   // Registra a pessoa de origem escolhida na combo do passo de responsável.
   // Ao reutilizar uma pessoa, garantimos a lista de municípios da UF dela para
   // que os débitos/planos exibam a cidade corretamente.
-  function escolherOrigemResponsavel(papel: Papel, origem: Papel | "novo" | "") {
+  function escolherOrigemResponsavel(
+    papel: Papel,
+    origem: Papel | "novo" | "",
+  ) {
     setOrigemResp((m) => ({ ...m, [papel]: origem }));
     setErroPasso(null);
-    if (origem && origem !== "novo") {
+    if (origem === "novo") {
+      // Cadastro de pessoa NOVA: formulário em BRANCO e editável. Zeramos o
+      // registro e o "original" do papel para não herdar os dados (e as travas
+      // de unicidade) do relacionado que veio no carregamento inicial.
+      setRegistros((m) => ({ ...m, [papel]: {} }));
+      setOriginais((m) => ({ ...m, [papel]: {} }));
+    } else if (origem) {
       const uf = registros[origem]?.["ESTADO"];
       if (typeof uf === "string" && uf) void garantirLista("municipios", uf);
     }
@@ -1208,45 +1220,44 @@ export function WizardMatricula({
     DebitosResponsavelFinanceiro | "carregando" | null
   >(null);
 
-  const consultarDebitos = useCallback(async (): Promise<
-    DebitosResponsavelFinanceiro | null
-  > => {
-    if (!parametros.validarDebitosResponsavelFinanceiro) return null;
-    // Reaproveitada (filiação) valida o CPF dela; "novo" valida o CPF digitado
-    // no formulário da pessoa distinta (registros.respFinanceiro).
-    const origem = origemResp.respFinanceiro || "";
-    const rec =
-      (origem && origem !== "novo"
-        ? registros[origem]
-        : registros.respFinanceiro) ?? {};
-    const cpf = valorSps(rec, "CPF").replace(/\D/g, "");
-    if (!cpf) {
-      setDebitos(null);
-      return null;
-    }
-    setDebitos("carregando");
-    try {
-      const q = new URLSearchParams({
-        idAreaOfertada: String(idAreaOfertada),
-        cpf,
-        nome: valorSps(rec, "NOME"),
-        idps: String(idps),
-        idHabilitacaoFilial: String(parametros.idHabilitacaoFilial ?? 0),
-      });
-      const res = await fetch(`/api/matricula/debitos?${q.toString()}`, {
-        cache: "no-store",
-      });
-      const data = (await res.json()) as
-        | { ok: true; debitos: DebitosResponsavelFinanceiro | null }
-        | { ok: false };
-      const d = data.ok ? data.debitos : null;
-      setDebitos(d);
-      return d;
-    } catch {
-      setDebitos(null);
-      return null;
-    }
-  }, [parametros, registros, idAreaOfertada, idps, origemResp]);
+  const consultarDebitos =
+    useCallback(async (): Promise<DebitosResponsavelFinanceiro | null> => {
+      if (!parametros.validarDebitosResponsavelFinanceiro) return null;
+      // Reaproveitada (filiação) valida o CPF dela; "novo" valida o CPF digitado
+      // no formulário da pessoa distinta (registros.respFinanceiro).
+      const origem = origemResp.respFinanceiro || "";
+      const rec =
+        (origem && origem !== "novo"
+          ? registros[origem]
+          : registros.respFinanceiro) ?? {};
+      const cpf = valorSps(rec, "CPF").replace(/\D/g, "");
+      if (!cpf) {
+        setDebitos(null);
+        return null;
+      }
+      setDebitos("carregando");
+      try {
+        const q = new URLSearchParams({
+          idAreaOfertada: String(idAreaOfertada),
+          cpf,
+          nome: valorSps(rec, "NOME"),
+          idps: String(idps),
+          idHabilitacaoFilial: String(parametros.idHabilitacaoFilial ?? 0),
+        });
+        const res = await fetch(`/api/matricula/debitos?${q.toString()}`, {
+          cache: "no-store",
+        });
+        const data = (await res.json()) as
+          | { ok: true; debitos: DebitosResponsavelFinanceiro | null }
+          | { ok: false };
+        const d = data.ok ? data.debitos : null;
+        setDebitos(d);
+        return d;
+      } catch {
+        setDebitos(null);
+        return null;
+      }
+    }, [parametros, registros, idAreaOfertada, idps, origemResp]);
 
   // Planos de pagamento ------------------------------------------------------
   const [planos, setPlanos] = useState<PlanoPagamento[]>([]);
