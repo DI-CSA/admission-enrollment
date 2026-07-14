@@ -743,11 +743,11 @@ export function WizardMatricula({
     window.scrollTo({ top: 0, behavior: "smooth" });
   }, [indice]);
 
-  // Combo "quem é o responsável": quando o usuário escolhe reaproveitar uma
-  // pessoa já cadastrada (candidato/filiação), guardamos aqui o papel de
-  // origem. "" (ou ausência) = preencher manualmente uma nova pessoa.
+  // Combo "quem é o responsável": guarda o papel de origem quando o usuário
+  // reaproveita uma pessoa já cadastrada (filiação), o sentinela "novo" quando
+  // opta por CADASTRAR outra pessoa, e "" quando ainda não escolheu.
   const [origemResp, setOrigemResp] = useState<
-    Partial<Record<Papel, Papel | "">>
+    Partial<Record<Papel, Papel | "novo" | "">>
   >({});
 
   // Numeração VISÍVEL: candidato + filiação + responsáveis contam como um único
@@ -772,10 +772,12 @@ export function WizardMatricula({
   // reaproveita os dados/flags da pessoa escolhida.
   const passoEhResponsavel =
     passo?.papel === "respFinanceiro" || passo?.papel === "respAcademico";
-  const origemResponsavel: Papel | "" =
+  const origemResponsavel: Papel | "novo" | "" =
     (passo?.papel && origemResp[passo.papel]) || "";
   const reutilizandoResponsavel =
-    passoEhResponsavel && origemResponsavel !== "";
+    passoEhResponsavel &&
+    origemResponsavel !== "" &&
+    origemResponsavel !== "novo";
 
   // Carregamento inicial: dados pessoais + campos ----------------------------
   const [carregando, setCarregando] = useState(true);
@@ -1016,14 +1018,14 @@ export function WizardMatricula({
   // Combo "quem é o responsável": o responsável (financeiro/acadêmico) deve ser
   // uma das filiações já cadastradas — só aparecem as filiações cujos dados já
   // foram preenchidos. O valor "" = "Selecione…" (nenhum formulário à mostra).
-  function opcoesResponsavel(): { valor: Papel | ""; rotulo: string }[] {
+  function opcoesResponsavel(): { valor: Papel | "novo" | ""; rotulo: string }[] {
     const nomeDe = (p: Papel) => {
       const n = registros[p]?.["NOME"];
       return typeof n === "string" && n.trim() ? ` — ${n.trim()}` : "";
     };
     const preenchida = (p: Papel) =>
       valorSps(registros[p] ?? {}, "NOME").trim() !== "";
-    const ops: { valor: Papel | ""; rotulo: string }[] = [
+    const ops: { valor: Papel | "novo" | ""; rotulo: string }[] = [
       { valor: "", rotulo: "Selecione…" },
     ];
     if (passos.some((p) => p.papel === "filiacao1") && preenchida("filiacao1"))
@@ -1036,16 +1038,19 @@ export function WizardMatricula({
         valor: "filiacao2",
         rotulo: `Filiação 2${nomeDe("filiacao2")}`,
       });
+    // Cadastrar uma pessoa DISTINTA como responsável (SalvarDadosPesoaisUsuarios
+    // com EHRESPFIN='T'), como o portal nativo (UsaDadosTipoRelac < 0).
+    ops.push({ valor: "novo", rotulo: "Outra pessoa (cadastrar)" });
     return ops;
   }
 
   // Registra a pessoa de origem escolhida na combo do passo de responsável.
   // Ao reutilizar uma pessoa, garantimos a lista de municípios da UF dela para
   // que os débitos/planos exibam a cidade corretamente.
-  function escolherOrigemResponsavel(papel: Papel, origem: Papel | "") {
+  function escolherOrigemResponsavel(papel: Papel, origem: Papel | "novo" | "") {
     setOrigemResp((m) => ({ ...m, [papel]: origem }));
     setErroPasso(null);
-    if (origem) {
+    if (origem && origem !== "novo") {
       const uf = registros[origem]?.["ESTADO"];
       if (typeof uf === "string" && uf) void garantirLista("municipios", uf);
     }
@@ -1105,8 +1110,10 @@ export function WizardMatricula({
       // pessoa de origem com as flags dela + a flag de responsável (aditiva),
       // preservando, por ex., EHCANDIDATO="T" do candidato.
       const reuso: Papel | "" =
-        papel === "respFinanceiro" || papel === "respAcademico"
-          ? origemResp[papel] || ""
+        (papel === "respFinanceiro" || papel === "respAcademico") &&
+        origemResp[papel] &&
+        origemResp[papel] !== "novo"
+          ? (origemResp[papel] as Papel)
           : "";
       const papelDados: Papel = reuso || papel;
       const rec = registros[papelDados] ?? {};
@@ -1201,13 +1208,22 @@ export function WizardMatricula({
     DebitosResponsavelFinanceiro | "carregando" | null
   >(null);
 
-  const consultarDebitos = useCallback(async () => {
-    if (!parametros.validarDebitosResponsavelFinanceiro) return;
-    // Se o responsável financeiro reaproveita outra pessoa, valida o CPF dela.
+  const consultarDebitos = useCallback(async (): Promise<
+    DebitosResponsavelFinanceiro | null
+  > => {
+    if (!parametros.validarDebitosResponsavelFinanceiro) return null;
+    // Reaproveitada (filiação) valida o CPF dela; "novo" valida o CPF digitado
+    // no formulário da pessoa distinta (registros.respFinanceiro).
     const origem = origemResp.respFinanceiro || "";
-    const rec = (origem ? registros[origem] : registros.respFinanceiro) ?? {};
+    const rec =
+      (origem && origem !== "novo"
+        ? registros[origem]
+        : registros.respFinanceiro) ?? {};
     const cpf = valorSps(rec, "CPF").replace(/\D/g, "");
-    if (!cpf) return;
+    if (!cpf) {
+      setDebitos(null);
+      return null;
+    }
     setDebitos("carregando");
     try {
       const q = new URLSearchParams({
@@ -1223,9 +1239,12 @@ export function WizardMatricula({
       const data = (await res.json()) as
         | { ok: true; debitos: DebitosResponsavelFinanceiro | null }
         | { ok: false };
-      setDebitos(data.ok ? data.debitos : null);
+      const d = data.ok ? data.debitos : null;
+      setDebitos(d);
+      return d;
     } catch {
       setDebitos(null);
+      return null;
     }
   }, [parametros, registros, idAreaOfertada, idps, origemResp]);
 
@@ -1515,12 +1534,12 @@ export function WizardMatricula({
       const ehResponsavel =
         passo.papel === "respFinanceiro" || passo.papel === "respAcademico";
       const origem = ehResponsavel ? origemResp[passo.papel] || "" : "";
-      // O responsável é escolhido pela combo (Filiação 1/2). Sem seleção, não
-      // há dados para gravar: bloqueia se o passo for obrigatório.
+      // O responsável é escolhido pela combo (Filiação 1/2 ou Outra pessoa). Sem
+      // seleção, não há dados para gravar: bloqueia se o passo for obrigatório.
       if (ehResponsavel && origem === "") {
         if (passo.obrigatorioBloco) {
           setErroPasso(
-            "Selecione quem será o responsável (Filiação 1 ou Filiação 2).",
+            "Selecione quem será o responsável (Filiação 1, Filiação 2 ou Outra pessoa).",
           );
           return;
         }
@@ -1528,9 +1547,9 @@ export function WizardMatricula({
         setIndice((i) => Math.min(i + 1, passos.length - 1));
         return;
       }
-      // Ao reutilizar uma pessoa já cadastrada como responsável, não há
-      // formulário manual para validar — a gravação usa os dados de origem.
-      if (!ehResponsavel) {
+      // Valida o formulário manual: candidato/filiação sempre; responsável só
+      // quando "Outra pessoa" (novo). Ao reutilizar, a gravação usa a origem.
+      if (!ehResponsavel || origem === "novo") {
         const msg = validarBloco(passo.papel, !!passo.obrigatorioBloco);
         if (msg) {
           setErroPasso(msg);
@@ -1543,11 +1562,16 @@ export function WizardMatricula({
       if (!ok) return;
     }
 
-    if (passo.id === "respFinanceiro") {
-      if (debitos && debitos !== "carregando" && debitos.bloqueia) {
+    if (
+      passo.id === "respFinanceiro" &&
+      parametros.validarDebitosResponsavelFinanceiro
+    ) {
+      // Reconsulta os débitos com o CPF efetivo (reaproveitado OU pessoa nova),
+      // aguardando o resultado antes de decidir se bloqueia.
+      const d = await consultarDebitos();
+      if (d && d.bloqueia) {
         setErroPasso(
-          debitos.mensagem ??
-            "Há pendências financeiras que impedem a matrícula.",
+          d.mensagem ?? "Há pendências financeiras que impedem a matrícula.",
         );
         return;
       }
@@ -1707,7 +1731,7 @@ export function WizardMatricula({
               onChange={(e) =>
                 escolherOrigemResponsavel(
                   passo!.papel as Papel,
-                  e.target.value as Papel | "",
+                  e.target.value as Papel | "novo" | "",
                 )
               }
             >
@@ -1749,7 +1773,7 @@ export function WizardMatricula({
           <p className="mb-3 rounded-lg bg-areia/60 px-4 py-3 text-sm text-cinza-suave">
             Selecione acima quem será o responsável{" "}
             {passo?.papel === "respFinanceiro" ? "financeiro" : "acadêmico"}{" "}
-            (Filiação 1 ou Filiação 2) para continuar.
+            (Filiação 1, Filiação 2 ou Outra pessoa) para continuar.
           </p>
         )}
 
@@ -1765,26 +1789,27 @@ export function WizardMatricula({
           </p>
         )}
 
-        {passo?.papel && !passoEhResponsavel && (
-          <FormularioPessoa
-            key={passo.papel}
-            campos={camposDoPasso}
-            ehCandidato={passo.papel === "candidato"}
-            registro={registros[passo.papel] ?? {}}
-            original={originais[passo.papel] ?? {}}
-            listas={listas}
-            chaveLista={chaveLista}
-            onEditar={(def, valor, itens) =>
-              editar(passo.papel as Papel, def, valor, itens)
-            }
-            onCopiarEndereco={
-              passo.papel !== "candidato"
-                ? () => copiarEnderecoCandidato(passo.papel as Papel)
-                : undefined
-            }
-            obrigatorioBloco={!!passo.obrigatorioBloco}
-          />
-        )}
+        {passo?.papel &&
+          (!passoEhResponsavel || origemResponsavel === "novo") && (
+            <FormularioPessoa
+              key={passo.papel}
+              campos={camposDoPasso}
+              ehCandidato={passo.papel === "candidato"}
+              registro={registros[passo.papel] ?? {}}
+              original={originais[passo.papel] ?? {}}
+              listas={listas}
+              chaveLista={chaveLista}
+              onEditar={(def, valor, itens) =>
+                editar(passo.papel as Papel, def, valor, itens)
+              }
+              onCopiarEndereco={
+                passo.papel !== "candidato"
+                  ? () => copiarEnderecoCandidato(passo.papel as Papel)
+                  : undefined
+              }
+              obrigatorioBloco={!!passo.obrigatorioBloco}
+            />
+          )}
 
         {passo?.id === "respFinanceiro" &&
           parametros.validarDebitosResponsavelFinanceiro && (

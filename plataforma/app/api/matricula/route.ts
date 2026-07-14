@@ -159,9 +159,7 @@ export async function POST(req: NextRequest) {
     if (Number.isInteger(idps) && idps > 0) {
       void conciliarMatriculas({
         apenasInscricao: { numeroInscricao, idps },
-      }).catch((e) =>
-        console.error("[matricula] conciliação RD falhou:", e),
-      );
+      }).catch((e) => console.error("[matricula] conciliação RD falhou:", e));
     }
 
     return NextResponse.json(
