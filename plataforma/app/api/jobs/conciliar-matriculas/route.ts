@@ -1,29 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
 import { timingSafeEqual } from "node:crypto";
-import { listarMatriculasParaConciliarReserva } from "@/lib/totvs/queries";
 import {
-  listarNegociacoesDoFunil,
-  moverNegociacaoParaEtapa,
-  ajustarValorReservaDeal,
-} from "@/lib/marketing/rdcrm";
-import { registrarEventoFunil } from "@/lib/marketing/rdstation";
+  conciliarMatriculas,
+  lerEtapasMatricula,
+} from "@/lib/marketing/conciliar-matriculas";
 
 // Job de CONCILIAÇÃO DA PRÉ-MATRÍCULA (chamado por cron, NÃO pelo navegador).
 //
-// Fluxo: busca no RM as matrículas do ciclo (RAMAT preenchido) com o estado do
-// BOLETO DE RESERVA (R$2.200), localiza a negociação correspondente no RD Station
-// CRM pela CHAVE ÚNICA (IDLAN da TAXA, embutido no nome como `[LAN:<idlan>]`) e a
-// AVANÇA para a etapa correta do funil:
+// Busca no RM as matrículas do ciclo (RAMAT preenchido) com o estado do BOLETO
+// DE RESERVA (R$2.200), localiza a negociação no RD Station CRM pela CHAVE ÚNICA
+// (IDLAN da TAXA, embutido no nome como `[LAN:<idlan>]`) e a avança para a etapa
+// correta do funil, ajustando o valor para a reserva:
 //   - reserva GERADA (STATUSLAN=0) → "Cadastro de matrícula" + evento "cadastro-matricula";
 //   - reserva PAGA   (STATUSLAN=1) → "Pré-matrícula"        + evento "reserva-matricula-paga".
-//
-// Idempotente e FORWARD-ONLY: nunca regride uma negociação que já esteja na etapa
-// alvo ou numa etapa posterior (ex.: "Matriculado", que é sinalizado à mão).
+// Idempotente e FORWARD-ONLY. A lógica mora em lib/marketing/conciliar-matriculas.
 //
 // Proteção: exige o cabeçalho `x-cron-secret` igual a CRON_SECRET (comparação em
 // tempo constante). Sem CRON_SECRET configurado, a rota fica desabilitada.
 //
-// Cron sugerido na VM (2x/dia):
+// Cron sugerido na VM (de hora em hora):
 //   curl -fsS -X POST -H "x-cron-secret: $CRON_SECRET" \
 //     http://127.0.0.1:3000/api/jobs/conciliar-matriculas
 
@@ -53,151 +48,15 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const stageCadastro =
-    process.env.RD_CRM_DEAL_STAGE_CADASTRO_MATRICULA_ID?.trim();
-  const stagePre = process.env.RD_CRM_DEAL_STAGE_PRE_MATRICULA_ID?.trim();
-  const stageMatriculado = process.env.RD_CRM_DEAL_STAGE_MATRICULADO_ID?.trim();
-  if (!process.env.RD_CRM_TOKEN || !stageCadastro || !stagePre) {
+  if (!lerEtapasMatricula()) {
     return NextResponse.json(
       { ok: false, erro: "crm-nao-configurado" },
       { status: 500 },
     );
   }
 
-  // Etapas consideradas "posteriores" a cada alvo (para não regredir). "Cadastro
-  // de matrícula" é anterior a "Pré-matrícula", que é anterior a "Matriculado".
-  const posterioresA = (alvo: string): Set<string> => {
-    if (alvo === stageCadastro)
-      return new Set(
-        [stageCadastro, stagePre, stageMatriculado].filter(
-          (s): s is string => !!s,
-        ),
-      );
-    // alvo === stagePre
-    return new Set(
-      [stagePre, stageMatriculado].filter((s): s is string => !!s),
-    );
-  };
-
-  // Modo simulação (?dry=1): detecta e casa os deals, mas NÃO move no CRM nem
-  // dispara evento de Marketing. Lista o que SERIA movido.
   const dryRun = req.nextUrl.searchParams.get("dry") === "1";
+  const resultado = await conciliarMatriculas({ dryRun });
 
-  const matriculas = await listarMatriculasParaConciliarReserva();
-
-  // Lista as negociações do funil uma vez e indexa por IDLAN da taxa (chave única).
-  const negociacoes = await listarNegociacoesDoFunil();
-  const porIdLan = new Map<string, (typeof negociacoes)[number]>();
-  for (const n of negociacoes) {
-    if (n.idLan) porIdLan.set(n.idLan, n);
-  }
-
-  let movidasCadastro = 0;
-  let movidasPre = 0;
-  let jaAvancadas = 0;
-  let semDeal = 0;
-  let semIdLan = 0;
-  let semReserva = 0;
-  let falhas = 0;
-  let valoresAjustados = 0;
-  const moveriam: Array<{ numeroInscricao: number; etapa: string }> = [];
-
-  for (const mat of matriculas) {
-    // Sem IDLAN da taxa não há como reconciliar pela chave única.
-    if (mat.idLan == null) {
-      semIdLan++;
-      continue;
-    }
-    // Sem título de reserva localizado, nada a fazer (matrícula sem boleto).
-    if (mat.reservaStatusLan == null) {
-      semReserva++;
-      continue;
-    }
-    const deal = porIdLan.get(String(mat.idLan));
-    if (!deal) {
-      semDeal++;
-      continue;
-    }
-
-    const reservaPaga = mat.reservaStatusLan === 1;
-    const alvo: string = reservaPaga ? stagePre : stageCadastro;
-    const etapaEvento = reservaPaga
-      ? ("reserva-matricula-paga" as const)
-      : ("cadastro-matricula" as const);
-
-    // Forward-only: se a negociação já está na etapa alvo ou numa posterior,
-    // não move (mas ainda pode precisar de ajuste de valor, abaixo).
-    const jaEmOuDepois =
-      !!deal.dealStageId && posterioresA(alvo).has(deal.dealStageId);
-    let stageEfetivo = deal.dealStageId;
-
-    if (jaEmOuDepois) {
-      jaAvancadas++;
-    } else if (dryRun) {
-      moveriam.push({
-        numeroInscricao: mat.numeroInscricao,
-        etapa: reservaPaga ? "Pré-matrícula" : "Cadastro de matrícula",
-      });
-      continue; // em simulação não ajusta valor
-    } else {
-      const ok = await moverNegociacaoParaEtapa(deal.id, alvo);
-      if (!ok) {
-        falhas++;
-        continue;
-      }
-      stageEfetivo = alvo;
-      if (reservaPaga) movidasPre++;
-      else movidasCadastro++;
-
-      // Evento de Marketing só após mover o deal (e apenas 1x, pois na próxima
-      // execução a negociação já estará na etapa alvo e será pulada acima).
-      if (mat.emailResponsavel) {
-        void registrarEventoFunil({
-          etapa: etapaEvento,
-          email: mat.emailResponsavel,
-          nome: mat.nomeResponsavel,
-          idps: mat.idps,
-          camposExtras: {
-            cf_numero_inscricao: mat.numeroInscricao,
-            ...(mat.nomeCandidato
-              ? { cf_nome_candidato: mat.nomeCandidato }
-              : {}),
-            ...(mat.reservaValor != null
-              ? { cf_valor_reserva: mat.reservaValor }
-              : {}),
-            ...(reservaPaga && mat.reservaDataPagamento
-              ? { cf_data_pagamento_reserva: mat.reservaDataPagamento }
-              : {}),
-          },
-        });
-      }
-    }
-
-    // Ajuste de VALOR: nas etapas de matrícula o valor da negociação deve ser a
-    // RESERVA (R$2.200), não a taxa (R$200). Aplica a qualquer deal em Cadastro
-    // de matrícula/Pré-matrícula — inclusive os já avançados (idempotente). Só
-    // em execução real (o dry-run foca no movimento de etapa).
-    if (
-      !dryRun &&
-      (stageEfetivo === stageCadastro || stageEfetivo === stagePre)
-    ) {
-      const okValor = await ajustarValorReservaDeal(deal.id);
-      if (okValor) valoresAjustados++;
-    }
-  }
-
-  return NextResponse.json({
-    ok: true,
-    dryRun,
-    verificadas: matriculas.length,
-    movidasCadastro,
-    movidasPre,
-    valoresAjustados,
-    jaAvancadas,
-    semDeal,
-    semIdLan,
-    semReserva,
-    falhas,
-    ...(dryRun ? { moveriam } : {}),
-  });
+  return NextResponse.json({ ok: true, dryRun, ...resultado });
 }

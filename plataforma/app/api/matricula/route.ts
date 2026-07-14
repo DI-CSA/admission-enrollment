@@ -8,6 +8,7 @@ import {
   matriculaSomenteLeitura,
 } from "@/lib/totvs/matricula";
 import { reconciliarSenhaPosMatricula } from "@/lib/totvs/senha-ps";
+import { conciliarMatriculas } from "@/lib/marketing/conciliar-matriculas";
 
 export const dynamic = "force-dynamic";
 
@@ -150,6 +151,17 @@ export async function POST(req: NextRequest) {
       } catch (e) {
         console.error("[matricula] reconciliação de senha falhou:", e);
       }
+    }
+
+    // Conciliação do funil RD Station (best-effort, NÃO bloqueia a resposta):
+    // coloca a negociação em "Cadastro de matrícula" (e ajusta o valor p/ a
+    // reserva de R$2.200) assim que a matrícula é efetivada, sem esperar o cron.
+    if (Number.isInteger(idps) && idps > 0) {
+      void conciliarMatriculas({
+        apenasInscricao: { numeroInscricao, idps },
+      }).catch((e) =>
+        console.error("[matricula] conciliação RD falhou:", e),
+      );
     }
 
     return NextResponse.json(
