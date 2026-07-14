@@ -423,3 +423,112 @@ export async function moverNegociacaoParaEtapa(
     return false;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Valor da negociação nas fases de matrícula (produto "Reserva de matrícula")
+// ---------------------------------------------------------------------------
+//
+// O valor de uma negociação no RD CRM é a SOMA dos seus `deal_products`. Nas
+// etapas "Cadastro de matrícula" e "Pré-matrícula", o valor relevante é a
+// RESERVA DE MATRÍCULA (R$2.200) — a taxa de inscrição (R$200), já paga nas
+// etapas anteriores, não deve mais ser representada. Este helper garante que a
+// negociação tenha APENAS o produto "Reserva de matrícula", trocando o produto
+// da taxa por ele. Idempotente e não-bloqueante.
+
+const NOME_PRODUTO_RESERVA = "Reserva de matrícula";
+const VALOR_PRODUTO_RESERVA = 2200;
+
+interface DealProduto {
+  id?: string;
+  _id?: string;
+  product_id?: string;
+  name?: string;
+}
+
+/**
+ * Ajusta o valor da negociação para a RESERVA de matrícula (R$2.200): adiciona o
+ * produto "Reserva de matrícula" (se faltar) e remove os demais produtos (ex.: a
+ * "Taxa de inscrição"), de modo que o valor total reflita só a reserva. Exige
+ * `RD_CRM_PRODUCT_RESERVA_ID` (id do produto de catálogo). Nunca lança: em falha
+ * retorna false e registra log. Idempotente (não faz nada se já está correto).
+ */
+export async function ajustarValorReservaDeal(
+  dealId: string,
+): Promise<boolean> {
+  const token = process.env.RD_CRM_TOKEN;
+  const productId = process.env.RD_CRM_PRODUCT_RESERVA_ID?.trim();
+  if (!token || !dealId || !productId) return false;
+  try {
+    const gd = await fetch(
+      `${RD_CRM_BASE}/deals/${encodeURIComponent(dealId)}?token=${encodeURIComponent(token)}`,
+      { method: "GET", headers: { Accept: "application/json" } },
+    );
+    if (!gd.ok) {
+      console.warn("[rdcrm] GET deal (valor) não-OK:", gd.status, dealId);
+      return false;
+    }
+    const deal = (await gd.json()) as { deal_products?: DealProduto[] };
+    const produtos = Array.isArray(deal.deal_products)
+      ? deal.deal_products
+      : [];
+    const ehReserva = (p: DealProduto) =>
+      p.product_id === productId ||
+      (p.name ?? "").trim() === NOME_PRODUTO_RESERVA;
+    const temReserva = produtos.some(ehReserva);
+    const outros = produtos.filter((p) => !ehReserva(p));
+
+    // Já está correto (só a reserva) → nada a fazer.
+    if (temReserva && outros.length === 0) return true;
+
+    // Adiciona a reserva quando faltar.
+    if (!temReserva) {
+      const add = await fetch(
+        `${RD_CRM_BASE}/deals/${encodeURIComponent(dealId)}/deal_products?token=${encodeURIComponent(token)}`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+          body: JSON.stringify({
+            deal_product: {
+              product_id: productId,
+              name: NOME_PRODUTO_RESERVA,
+              base_price: VALOR_PRODUTO_RESERVA,
+              price: VALOR_PRODUTO_RESERVA,
+              amount: 1,
+              recurrence: "spare",
+            },
+          }),
+        },
+      );
+      if (!add.ok) {
+        console.warn("[rdcrm] add produto reserva não-OK:", add.status, dealId);
+        return false;
+      }
+    }
+
+    // Remove os demais produtos (ex.: "Taxa de inscrição") para o valor refletir
+    // apenas a reserva de matrícula.
+    for (const p of outros) {
+      const pid = p.id ?? p._id;
+      if (!pid) continue;
+      const del = await fetch(
+        `${RD_CRM_BASE}/deals/${encodeURIComponent(dealId)}/deal_products/${encodeURIComponent(pid)}?token=${encodeURIComponent(token)}`,
+        { method: "DELETE", headers: { Accept: "application/json" } },
+      );
+      if (!del.ok) {
+        console.warn(
+          "[rdcrm] remover produto (valor) não-OK:",
+          del.status,
+          dealId,
+          pid,
+        );
+      }
+    }
+    return true;
+  } catch (e) {
+    console.warn("[rdcrm] falha ao ajustar valor da reserva:", dealId, e);
+    return false;
+  }
+}

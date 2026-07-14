@@ -4,6 +4,7 @@ import { listarMatriculasParaConciliarReserva } from "@/lib/totvs/queries";
 import {
   listarNegociacoesDoFunil,
   moverNegociacaoParaEtapa,
+  ajustarValorReservaDeal,
 } from "@/lib/marketing/rdcrm";
 import { registrarEventoFunil } from "@/lib/marketing/rdstation";
 
@@ -55,8 +56,7 @@ export async function POST(req: NextRequest) {
   const stageCadastro =
     process.env.RD_CRM_DEAL_STAGE_CADASTRO_MATRICULA_ID?.trim();
   const stagePre = process.env.RD_CRM_DEAL_STAGE_PRE_MATRICULA_ID?.trim();
-  const stageMatriculado =
-    process.env.RD_CRM_DEAL_STAGE_MATRICULADO_ID?.trim();
+  const stageMatriculado = process.env.RD_CRM_DEAL_STAGE_MATRICULADO_ID?.trim();
   if (!process.env.RD_CRM_TOKEN || !stageCadastro || !stagePre) {
     return NextResponse.json(
       { ok: false, erro: "crm-nao-configurado" },
@@ -99,6 +99,7 @@ export async function POST(req: NextRequest) {
   let semIdLan = 0;
   let semReserva = 0;
   let falhas = 0;
+  let valoresAjustados = 0;
   const moveriam: Array<{ numeroInscricao: number; etapa: string }> = [];
 
   for (const mat of matriculas) {
@@ -119,54 +120,69 @@ export async function POST(req: NextRequest) {
     }
 
     const reservaPaga = mat.reservaStatusLan === 1;
-    const alvo = reservaPaga ? stagePre : stageCadastro;
+    const alvo: string = reservaPaga ? stagePre : stageCadastro;
     const etapaEvento = reservaPaga
       ? ("reserva-matricula-paga" as const)
       : ("cadastro-matricula" as const);
 
-    // Forward-only: se a negociação já está na etapa alvo ou numa posterior, pula.
-    if (deal.dealStageId && posterioresA(alvo).has(deal.dealStageId)) {
-      jaAvancadas++;
-      continue;
-    }
+    // Forward-only: se a negociação já está na etapa alvo ou numa posterior,
+    // não move (mas ainda pode precisar de ajuste de valor, abaixo).
+    const jaEmOuDepois =
+      !!deal.dealStageId && posterioresA(alvo).has(deal.dealStageId);
+    let stageEfetivo = deal.dealStageId;
 
-    if (dryRun) {
+    if (jaEmOuDepois) {
+      jaAvancadas++;
+    } else if (dryRun) {
       moveriam.push({
         numeroInscricao: mat.numeroInscricao,
         etapa: reservaPaga ? "Pré-matrícula" : "Cadastro de matrícula",
       });
-      continue;
+      continue; // em simulação não ajusta valor
+    } else {
+      const ok = await moverNegociacaoParaEtapa(deal.id, alvo);
+      if (!ok) {
+        falhas++;
+        continue;
+      }
+      stageEfetivo = alvo;
+      if (reservaPaga) movidasPre++;
+      else movidasCadastro++;
+
+      // Evento de Marketing só após mover o deal (e apenas 1x, pois na próxima
+      // execução a negociação já estará na etapa alvo e será pulada acima).
+      if (mat.emailResponsavel) {
+        void registrarEventoFunil({
+          etapa: etapaEvento,
+          email: mat.emailResponsavel,
+          nome: mat.nomeResponsavel,
+          idps: mat.idps,
+          camposExtras: {
+            cf_numero_inscricao: mat.numeroInscricao,
+            ...(mat.nomeCandidato
+              ? { cf_nome_candidato: mat.nomeCandidato }
+              : {}),
+            ...(mat.reservaValor != null
+              ? { cf_valor_reserva: mat.reservaValor }
+              : {}),
+            ...(reservaPaga && mat.reservaDataPagamento
+              ? { cf_data_pagamento_reserva: mat.reservaDataPagamento }
+              : {}),
+          },
+        });
+      }
     }
 
-    const ok = await moverNegociacaoParaEtapa(deal.id, alvo);
-    if (!ok) {
-      falhas++;
-      continue;
-    }
-    if (reservaPaga) movidasPre++;
-    else movidasCadastro++;
-
-    // Evento de Marketing só após mover o deal (e apenas 1x, pois na próxima
-    // execução a negociação já estará na etapa alvo e será pulada acima).
-    if (mat.emailResponsavel) {
-      void registrarEventoFunil({
-        etapa: etapaEvento,
-        email: mat.emailResponsavel,
-        nome: mat.nomeResponsavel,
-        idps: mat.idps,
-        camposExtras: {
-          cf_numero_inscricao: mat.numeroInscricao,
-          ...(mat.nomeCandidato
-            ? { cf_nome_candidato: mat.nomeCandidato }
-            : {}),
-          ...(mat.reservaValor != null
-            ? { cf_valor_reserva: mat.reservaValor }
-            : {}),
-          ...(reservaPaga && mat.reservaDataPagamento
-            ? { cf_data_pagamento_reserva: mat.reservaDataPagamento }
-            : {}),
-        },
-      });
+    // Ajuste de VALOR: nas etapas de matrícula o valor da negociação deve ser a
+    // RESERVA (R$2.200), não a taxa (R$200). Aplica a qualquer deal em Cadastro
+    // de matrícula/Pré-matrícula — inclusive os já avançados (idempotente). Só
+    // em execução real (o dry-run foca no movimento de etapa).
+    if (
+      !dryRun &&
+      (stageEfetivo === stageCadastro || stageEfetivo === stagePre)
+    ) {
+      const okValor = await ajustarValorReservaDeal(deal.id);
+      if (okValor) valoresAjustados++;
     }
   }
 
@@ -176,6 +192,7 @@ export async function POST(req: NextRequest) {
     verificadas: matriculas.length,
     movidasCadastro,
     movidasPre,
+    valoresAjustados,
     jaAvancadas,
     semDeal,
     semIdLan,
