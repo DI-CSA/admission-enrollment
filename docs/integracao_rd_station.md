@@ -652,7 +652,107 @@ A execução roda na **VM Linux `csa-portal01`** (não é Windows) via **cron do
 
 ---
 
-## 12. Segurança e LGPD (resumo)
+## 12. Funil de PRÉ-MATRÍCULA — Cadastro de matrícula + Pré-matrícula (IMPLEMENTADO)
+
+Depois de "Taxa paga", o funil **Admissão 2027** ganhou duas etapas novas para
+acompanhar a matrícula do candidato aprovado, dirigidas pelo **boleto de reserva
+de matrícula (R$2.200)**:
+
+```
+Sem contato → Inscrito → Taxa paga → Prova/Entrevista →
+  Cadastro de matrícula → Pré-matrícula → Matriculado
+```
+
+- **Cadastro de matrícula** (`RD_CRM_DEAL_STAGE_CADASTRO_MATRICULA_ID`): a matrícula
+  foi efetivada e o **boleto de reserva foi GERADO** (cadastro preenchido e válido).
+  No RM: `SPSINSCRICAOAREAOFERTADA.RAMAT` preenchido e o título FLAN da reserva com
+  `STATUSLAN=0`.
+- **Pré-matrícula** (`RD_CRM_DEAL_STAGE_PRE_MATRICULA_ID`): o **boleto de reserva foi
+  PAGO** (`FLAN.STATUSLAN=1`). Pré-matrícula confirmada.
+- **Matriculado** (`RD_CRM_DEAL_STAGE_MATRICULADO_ID`): contrato assinado — **sinalizado
+  manualmente** (sem automação).
+
+> O 1º ano do Fundamental não passa por *Prova/Entrevista*. Como a automação é dirigida
+> por **pagamento**, esse "pulo" acontece sozinho (o deal nunca entra em Prova/Entrevista).
+
+### 12.1 Reconciliação (como o deal anda)
+
+A chave de reconciliação continua sendo o **IDLAN da TAXA** de inscrição, embutido no
+nome do deal como `[LAN:<idlan>]`. A localização da reserva no RM é
+`SPSINSCRICAOAREAOFERTADA.RAMAT → SPARCELA → SLAN → FLAN` (título de menor vencimento =
+a entrada/reserva de R$2.200). O job:
+
+1. move o deal para *Cadastro de matrícula* (reserva gerada) ou *Pré-matrícula* (paga),
+   **forward-only** (nunca regride);
+2. ajusta o **valor** da negociação para **R$2.200** (produto "Reserva de matrícula"),
+   removendo a taxa de R$200 — que já não é relevante nessas fases;
+3. grava os **campos personalizados** de enriquecimento (§12.2).
+
+Eventos de Marketing novos: `cadastro-matricula` e `reserva-matricula-paga`.
+
+### 12.2 Enriquecimento por CAMPOS PERSONALIZADOS (contatos + datas)
+
+⚠️ **Limite da API v1 do CRM:** não é possível adicionar/atualizar **contatos** de um deal
+que já existe (`POST /deals/{id}/contacts` → 404; `PUT /deals/{id}` **ignora** `contacts`).
+Contatos só entram na **criação** do deal. Por isso os dados de pai/mãe/responsável
+financeiro são gravados em **campos personalizados** (que o `PUT /deals/{id}` **atualiza**
+via `deal_custom_fields`). Cinco campos (criados por `scripts/rdcrm-cria-campos-matricula.mjs`):
+
+| Campo | Origem no RM | Env (UUID) |
+|---|---|---|
+| **Pai** | `SPSUSUARIOTIPORELAC` TIPORELAC=1 + `SPSUSUARIO` | `RD_CRM_CF_PAI_ID` |
+| **Mãe** | TIPORELAC=2 | `RD_CRM_CF_MAE_ID` |
+| **Responsável financeiro** | TIPORELAC=3 | `RD_CRM_CF_RESP_FINANCEIRO_ID` |
+| **Data do cadastro de matrícula** | `SALUNO.RECCREATEDON` (efetivação) | `RD_CRM_CF_DATA_CADASTRO_ID` |
+| **Data do pagamento da reserva** | `FLAN.DATABAIXA` | `RD_CRM_CF_DATA_PAGAMENTO_ID` |
+
+Cada contato vira texto `Nome · CPF <cpf> · <email> · <telefone>`; as datas em `dd/mm/aaaa`
+(com hora no cadastro). As **datas são as reais do RM** (não a hora em que o job rodou) —
+por isso *não* faz sentido deletar/recriar deals: o RD carimba `created_at`/mudanças de
+etapa com "agora" e não permite backdatar.
+
+### 12.3 Execução — cron horário, gatilho na matrícula e disparo LOCAL
+
+- **Cron (rede de segurança):** `/etc/cron.d/csa-conciliar` roda o job **de hora em hora**
+  (`15 * * * *`) na VM: `POST /api/jobs/conciliar-matriculas` (guard `x-cron-secret`).
+- **Tempo quase real:** ao efetivar a matrícula, `POST /api/matricula` dispara a
+  conciliação **da inscrição** (best-effort, não bloqueia) — o deal entra em *Cadastro de
+  matrícula* na hora.
+- **Disparo LOCAL (on-demand, do Mac):** `plataforma/scripts/conciliar-matriculas-local.mjs`
+  — lê o RM de produção (via `.env.local`) e atualiza o RD pela API (mover etapa + valor +
+  campos), **sem depender do cron**. DRY por padrão; `--commit` aplica:
+
+  ```bash
+  cd plataforma
+  node --env-file=.env.local scripts/conciliar-matriculas-local.mjs            # prévia (dry-run)
+  node --env-file=.env.local scripts/conciliar-matriculas-local.mjs --commit   # aplica no RD
+  ```
+
+  Os IDs de etapas/campos/produto são defaults embutidos (não são segredos; sobrescrevíveis
+  por env). Só o `RD_CRM_TOKEN` e as credenciais do banco vêm do `.env.local`. Não dispara
+  eventos de Marketing (ficam com o cron, para não duplicar conversões).
+
+### 12.4 Código e ambiente
+
+- **Núcleo:** `plataforma/lib/marketing/conciliar-matriculas.ts` (`conciliarMatriculas`),
+  usado pela rota do cron **e** pelo commit da matrícula (opção `apenasInscricao`).
+- **CRM:** `plataforma/lib/marketing/rdcrm.ts` — `moverNegociacaoParaEtapa`,
+  `ajustarValorReservaDeal`, `atualizarCamposMatriculaDeal`.
+- **SQL:** `plataforma/lib/totvs/queries.ts` — `listarMatriculasParaConciliarReserva`
+  (estado da reserva + pai/mãe/resp. financeiro + data de cadastro).
+- **Envs (VM `/etc/csa-portal/.env`):** `RD_CRM_DEAL_STAGE_CADASTRO_MATRICULA_ID`,
+  `RD_CRM_DEAL_STAGE_PRE_MATRICULA_ID`, `RD_CRM_DEAL_STAGE_MATRICULADO_ID`,
+  `RD_CRM_PRODUCT_RESERVA_ID`, `RD_CRM_CF_PAI_ID`, `RD_CRM_CF_MAE_ID`,
+  `RD_CRM_CF_RESP_FINANCEIRO_ID`, `RD_CRM_CF_DATA_CADASTRO_ID`, `RD_CRM_CF_DATA_PAGAMENTO_ID`.
+
+> **Portal (correlato):** no assistente de matrícula, o passo "responsável financeiro"
+> agora permite **"Outra pessoa (cadastrar)"** além de reaproveitar Filiação 1/2 — grava a
+> pessoa distinta via `SalvarDadosPesoaisUsuarios` (`EHRESPFIN='T'`) e valida débitos pelo
+> CPF dela. (`plataforma/components/WizardMatricula.tsx`.)
+
+---
+
+## 13. Segurança e LGPD (resumo)
 
 - **Token só no servidor.** `RD_STATION_TOKEN` e `RD_CRM_TOKEN` vivem no
   `.env.local`/ambiente; nunca no bundle do cliente. As libs são `server-only`.
