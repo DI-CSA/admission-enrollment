@@ -650,6 +650,23 @@ A execução roda na **VM Linux `csa-portal01`** (não é Windows) via **cron do
 > `node --env-file=.env.local` e usam apenas `RD_CRM_TOKEN` (somente leitura, salvo quando
 > explicitamente executam escrita confirmada).
 
+### 11.2 Disparo LOCAL da conciliação da inscrição (on-demand)
+
+Além do cron, dá para disparar a conciliação da **inscrição** do Mac, sem esperar o
+agendamento — útil enquanto o processo de inscrição está em curso:
+
+```bash
+cd plataforma
+node --env-file=.env.local scripts/conciliar-pagamentos-local.mjs            # prévia (dry-run)
+node --env-file=.env.local scripts/conciliar-pagamentos-local.mjs --commit   # aplica no RD
+```
+
+Lê o RM de produção (via `.env.local`) e, para cada inscrição com a **taxa (R$200) paga**
+(`FLAN.STATUSLAN=1`), move o deal **Inscrito → Taxa paga** (forward-only), garante o
+**valor R$200** (produto "Taxa de inscrição") e dispara o evento de Marketing
+`pagamento-confirmado`. É o par do `conciliar-matriculas-local.mjs` (§12.3), só que para a
+etapa de inscrição.
+
 ---
 
 ## 12. Funil de PRÉ-MATRÍCULA — Cadastro de matrícula + Pré-matrícula (IMPLEMENTADO)
