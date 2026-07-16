@@ -605,7 +605,10 @@ export async function atualizarCamposMatriculaDeal(
   push("RD_CRM_CF_PAI_ID", fmtContatoDeal(dados.pai));
   push("RD_CRM_CF_MAE_ID", fmtContatoDeal(dados.mae));
   push("RD_CRM_CF_RESP_FINANCEIRO_ID", fmtContatoDeal(dados.respFinanceiro));
-  push("RD_CRM_CF_DATA_CADASTRO_ID", fmtDataHoraBr(dados.dataCadastroMatricula));
+  push(
+    "RD_CRM_CF_DATA_CADASTRO_ID",
+    fmtDataHoraBr(dados.dataCadastroMatricula),
+  );
   push("RD_CRM_CF_DATA_PAGAMENTO_ID", fmtDataBr(dados.dataPagamentoReserva));
   if (!cf.length) return false;
   try {
