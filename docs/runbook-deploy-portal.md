@@ -105,12 +105,15 @@ sudo journalctl -u csa-portal -n 30 --no-pager    # em caso de erro
 
 ### 4.3 Aguardar o certificado ficar ACTIVE → ver seção 5.
 
-### 4.4 (No go-live real) liberar a gravação de inscrições
+### 4.4 (No go-live real) liberar as gravações de inscrição e matrícula
 Enquanto estiver testando, `INSCRICAO_SOMENTE_LEITURA=true` bloqueia a **gravação final**
-da inscrição no RM (login e painel funcionam normalmente). Só quando for abrir de verdade:
+da inscrição no RM. `MATRICULA_SOMENTE_LEITURA=true` bloqueia uploads, alteração de dados,
+assinatura e efetivação da matrícula. Só libere cada fluxo quando o ambiente RM estiver
+confirmado:
 ```bash
 # na VM:
 sudo sed -i 's/^INSCRICAO_SOMENTE_LEITURA=.*/INSCRICAO_SOMENTE_LEITURA=false/' /etc/csa-portal/.env
+sudo sed -i 's/^MATRICULA_SOMENTE_LEITURA=.*/MATRICULA_SOMENTE_LEITURA=false/' /etc/csa-portal/.env
 sudo systemctl restart csa-portal
 ```
 
@@ -246,7 +249,26 @@ sudo nginx -t && sudo systemctl reload nginx
 
 # saúde do backend no LB (do Mac)
 gcloud compute backend-services get-health csa-portal-bes --global --project=totvs-iaas
+
+# cron e logs das conciliações RD
+sudo cat /etc/cron.d/csa-conciliar
+sudo tail -n 100 /var/log/csa-conciliar.log
+
+# simulação local das conciliações, sem alterar o RD
+SECRET="$(sudo sed -n 's/^CRON_SECRET=//p' /etc/csa-portal/.env | head -1)"
+curl -fsS -X POST -H "x-cron-secret: $SECRET" \
+  "http://127.0.0.1:3000/api/jobs/conciliar-pagamentos?dry=1"
+curl -fsS -X POST -H "x-cron-secret: $SECRET" \
+  "http://127.0.0.1:3000/api/jobs/conciliar-matriculas?dry=1"
 ```
+
+A conciliação de matrícula interpreta o boleto de reserva de **R$ 2.200**:
+
+- reserva gerada → `Cadastro de matrícula`;
+- reserva paga → `Pré-matrícula`.
+
+Ao efetivar a matrícula, a aplicação tenta avançar o deal imediatamente. O cron horário é
+a rede de segurança para falhas transitórias e pagamentos confirmados depois.
 
 Caminhos importantes na VM:
 - App (standalone): `/opt/csa-portal/.next/standalone/server.js`
@@ -261,6 +283,9 @@ Caminhos importantes na VM:
 
 - [ ] `AUTH_MASTER_KEY` **vazio** no `.env` (o backdoor de teste deve ficar desligado).
 - [ ] `INSCRICAO_SOMENTE_LEITURA=false` **apenas** no go-live real.
+- [ ] `MATRICULA_SOMENTE_LEITURA=false` somente com WebAPI e SQL apontando para o ambiente correto.
+- [ ] `CRON_SECRET` configurado; rotas de jobs recusam chamadas sem o cabeçalho correto.
+- [ ] IDs de etapas, produto de reserva e campos de matrícula do RD CRM configurados.
 - [ ] `/etc/csa-portal/.env` com perms `600`, dono `csaportal`.
 - [ ] VM sem IP externo (confirmado); SSH só por IAP; SQL liberado só da VM (`10.10.0.20`).
 - [ ] Certificado(s) gerenciado(s) `ACTIVE`; HTTP redireciona para HTTPS.

@@ -1,12 +1,14 @@
-# Arquitetura — Front-end Next.js integrado ao TOTVS RM (Processo Seletivo)
+# Arquitetura — Plataforma Next.js integrada ao TOTVS RM (Inscrição e Matrícula)
 
 **Contexto:** TOTVS Educacional / Linha RM / Portal do Processo Seletivo (WebAPI EduPS)
 **Servidor RM:** VM Windows (IIS) na GCP — `inscricao.csa.com.br`
-**Objetivo:** entregar uma experiência de inscrição com visual 100% próprio (hotsite),
-reconhecendo/logando usuários já existentes no RM, fazendo cadastro e inscrição, e
-entregando o **boleto da taxa de inscrição** gerado pelo próprio RM, com captura de leads
-no **RD Station**.
-**Data:** 26/06/2026
+**Objetivo:** entregar uma experiência própria para todo o percurso de admissão:
+hotsite, cadastro, inscrição, boleto da taxa, acompanhamento, matrícula dos candidatos
+aprovados, contrato e boleto de reserva de matrícula, mantendo o RM como sistema
+autoritativo e integrando os marcos do processo ao RD Station.
+**Documento criado em:** 26/06/2026
+
+**Estado revisado em:** 16/07/2026
 
 > Premissas assumidas pelo projeto:
 > - Temos **controle total** do servidor, do domínio e do DNS.
@@ -27,14 +29,14 @@ TOTVS, camada BFF→RM, design system do CSA, sessão e configuração/segredos)
 flowchart TD
     subgraph APP["Plataforma Next.js (1 app · 1 deploy · 1 origem)"]
       INFRA["INFRA COMPARTILHADA<br/>Auth TOTVS · BFF→RM · Design system CSA · Sessão · Config/Secrets"]
-      P1["PORTAL DE INSCRIÇÕES  ◀ FOCO AGORA"]
+      P1["Portal de Inscrições<br/>IMPLEMENTADO"]
+      P4["Matrícula on-line<br/>IMPLEMENTADA"]
       P2["Portal do Aluno (futuro)"]
       P3["Portal do Professor (futuro)"]
-      P4["Matrícula (futuro)"]
       INFRA --- P1
+      INFRA --- P4
       INFRA --- P2
       INFRA --- P3
-      INFRA --- P4
     end
 ```
 
@@ -47,9 +49,12 @@ entrada** do portal de inscrições; o fluxo de inscrição é a **continuação
 
 ### 0.2. Crescimento por módulos
 
-Cada novo portal (aluno, professor, matrícula, …) é apenas um **segmento de rota** que se
+Cada novo portal (aluno, professor, …) é apenas um **segmento de rota** que se
 pluga na infra existente. Adicionar um módulo = criar a pasta da rota + as rotas de BFF
 correspondentes, **sem alterar** o que já funciona.
+
+Esse modelo já foi validado pela matrícula: a rota `/matricula` reutiliza autenticação,
+sessão, cliente RM, leituras SQL, design system e operação do mesmo deploy.
 
 ### 0.3. Infra de autenticação genérica desde o início
 
@@ -65,32 +70,35 @@ Assim a autenticação já fica pronta para os módulos futuros.
 ```text
 app/
   page.tsx              # ENTRADA do Portal de Inscrições (o "hot site": hero + 2 editais + lead)
-  inscricoes/           # continuação do MESMO portal (deep-link TOTVS agora; nativo depois)
+  inscricoes/           # fluxo nativo de inscrição e painel do responsável
+  matricula/            # fluxo dedicado de matrícula dos candidatos elegíveis
+  api/inscricao/        # BFF da inscrição, documentos, boleto e comprovante
+  api/matricula/        # BFF da matrícula, contrato, documentos, planos e boleto
+  api/jobs/             # conciliações RM → RD Station
   portal-aluno/         # FUTURO — outro módulo (auth TOTVS)
   portal-professor/     # FUTURO — outro módulo (auth TOTVS)
-  matricula/            # FUTURO — outro módulo
-  api/                  # BFF compartilhado (auth TOTVS, lead RD Station, catálogo, ...)
   middleware.ts         # protege rotas dos portais (sessão TOTVS)
 components/             # design system CSA (compartilhado por todos os módulos)
 lib/
-  rm/                   # cliente RM genérico (multi-WebAPI)
-  auth/                 # sessão TOTVS (cookie do RM guardado server-side)
+  rm/                   # cliente RM genérico
+  totvs/                # inscrição, matrícula, sessão e consultas SQL
+  marketing/            # RD Marketing, RD CRM e conciliações
   processos.ts          # config dos PS de 2027 (IDs ps)
 ```
 
-### 0.5. Prioridade e faseamento de produto
+### 0.5. Estado atual dos módulos
 
-> **Foco agora:** colocar o **Portal de Inscrições** (hot site) no ar e testado. Ele
-> **orienta a fundação** da plataforma. Só depois de funcionando incorporam-se os demais
-> módulos, passo a passo.
-
-- **MVP (Fase 1):** landing CSA Leblon 2027 com os dois editais + captura de lead (RD Station
-  via BFF) + CTA **"Inscrever"** fazendo **deep-link ao portal TOTVS existente** (`?c&f&ps`).
-  Não se reimplementa o wizard agora.
-- **Fase 2:** fluxo de inscrição **nativo** dentro do mesmo módulo (login/cadastro/wizard via
-  BFF→RM) — troca-se apenas o destino do CTA, sem retrabalho.
-- **Fase 3:** boleto da taxa (URL gerada pelo RM).
-- **Depois:** novos módulos (matrícula, portal do aluno/professor) sobre a mesma infra.
+| Módulo | Estado |
+| --- | --- |
+| Hot site e editais 2027 | Implementado |
+| Cadastro/login do responsável e painel | Implementado |
+| Wizard nativo de inscrição | Implementado |
+| Documentos, boleto da taxa e comprovante | Implementado |
+| Matrícula on-line de candidatos aprovados/em chamada | Implementado |
+| Contrato e assinatura conforme parâmetros do RM | Implementado |
+| Boleto de reserva de matrícula de **R$ 2.200** | Implementado |
+| Integração RD Marketing e CRM | Implementada, com conciliações automáticas |
+| Portal do Aluno e Portal do Professor | Futuros |
 
 O guia visual e de conteúdo do hot site/portal de inscrições está em
 [guia_hotsite_csa_leblon_2027.md](guia_hotsite_csa_leblon_2027.md).
@@ -249,23 +257,25 @@ RMSRestDataServer) e o script [plataforma/scripts/rm-discovery.mjs](../plataform
 
 ---
 
-## 3. Arquitetura escolhida
+## 3. Arquitetura implementada
 
 **Front-end Next.js (com BFF) rodando como serviço Node nativo em uma VM Linux pequena na
-mesma VPC da VM Windows (RM), com o IIS como porta de entrada única.**
+mesma VPC da VM Windows (RM). A entrada pública é um **GCP External HTTPS Load Balancer**;
+na VM, o **Nginx** encaminha para o processo Next.js.
 
 > **Sem Docker.** O Next.js roda diretamente como processo Node gerenciado por `systemd`.
 
 ```mermaid
 flowchart LR
-    B[Browser] -->|"HTTPS, 1 origem<br/>inscricao.csa.com.br"| IIS[IIS - entrada única<br/>VM Windows]
-    IIS -->|"/FrameHTML/*"| RM[RM WebAPI<br/>VM Windows / IIS]
-    IIS -->|"/* (reverse proxy)"| NX[Next.js - Node/systemd<br/>VM Linux GCE]
+    B[Browser] -->|"HTTPS<br/>inscricao.csa.com.br"| LB[GCP HTTPS Load Balancer<br/>TLS gerenciado]
+    LB --> NG[Nginx :80<br/>VM csa-portal01]
+    NG --> NX[Next.js standalone :3000<br/>systemd]
     NX -. BFF server-to-server<br/>VPC privada .-> RM
+    RM[RM WebAPI / SQL<br/>VMs TOTVS]
 ```
 
 Dois caminhos:
-- **Browser → IIS → Next** (público, **uma única origem**): aqui vive o **cookie de sessão do BFF** (httpOnly).
+- **Browser → Load Balancer → Nginx → Next**: aqui vive o **cookie de sessão do BFF** (httpOnly).
 - **Next (BFF) → RM** (privado, dentro da VPC, **IP interno**): server-to-server, segurando o
   cookie do RM no servidor. O browser **nunca** toca o RM nem a VM Linux diretamente → **sem CORS**.
 
@@ -381,7 +391,12 @@ Responsável (CPF) ── inscreve ──► [candidato A] [candidato B] [candid
 
 ---
 
-## 4. Deploy (escolhido): VM Linux + Node nativo + IIS como entrada única
+## 4. Proposta histórica de deploy: IIS como entrada única
+
+> Esta seção preserva a proposta arquitetural inicial para referência. Ela foi
+> **substituída na implantação real** pelo GCP External HTTPS Load Balancer + Nginx descrito
+> na seção 3. Os nomes, comandos e exemplos abaixo não devem ser usados para operar
+> produção. O procedimento vigente está em `runbook-deploy-portal.md`.
 
 ### 4.1. Provisionar a VM Linux
 
@@ -530,15 +545,29 @@ in-memory para **Memorystore (Redis)**.
 
 ---
 
-## 6. Integração com RD Station (captura de leads)
+## 6. Integração com RD Station
 
-- Capturar lead no **topo de funil** e em marcos do wizard (ex.: início da inscrição), **sem
-  bloquear** o fluxo do RM.
-- Espelhar eventos de interesse usando os próprios marcos que o RM já registra
-  (`NotificaInteracao`/`NotificaInteracaoEvento`).
-- **LGPD:** só enviar dados pessoais ao RD Station com base legal/consentimento; preferir envio
-  **server-side pelo BFF** (não expor tokens no browser); não trafegar dados sensíveis para
-  analytics sem avaliação jurídica.
+A integração é server-side, best-effort e não bloqueia os fluxos do RM. O RD Marketing
+recebe conversões e o RD CRM mantém uma negociação por inscrição.
+
+O pipeline implementado é:
+
+```text
+Inscrito → Taxa paga → Prova/Entrevista →
+Cadastro de matrícula → Pré-matrícula → Matriculado
+```
+
+- **Inscrito:** inscrição gravada e boleto da taxa gerado.
+- **Taxa paga:** conciliação por `FLAN.STATUSLAN=1`.
+- **Cadastro de matrícula:** matrícula efetivada, com RA e boleto de reserva gerado.
+- **Pré-matrícula:** boleto de reserva de **R$ 2.200** pago.
+- **Matriculado:** etapa final controlada manualmente após assinatura/validação operacional.
+
+Ao efetivar a matrícula, a aplicação dispara uma conciliação best-effort para avançar o
+deal imediatamente. Um cron horário executa a mesma lógica como rede de segurança. O
+processamento é idempotente e somente avança etapas; nunca regride uma negociação.
+
+Detalhes, campos e operação: `integracao_rd_station.md`.
 
 ---
 
@@ -552,11 +581,14 @@ in-memory para **Memorystore (Redis)**.
 
 ---
 
-## 8. Faseamento
+## 8. Evolução entregue
 
-1. **Fase 1 — Topo de funil + leitura** (risco baixo): vitrine de cursos, `ExisteUsuario`,
-   combos/domínios e **captura de leads RD Station**.
-2. **Fase 2 — Núcleo da inscrição:** login/recuperação → dados pessoais
-   (`BuscaUsuario`/`Usuario`) → `NovaInscricao` + termo + questionário; validar `Comprovante`.
-3. **Fase 3 — Boleto** (trivial): `InfoBoletoInscricao`/`BoletoFixoTaxaInscricao` → entregar
-   `URLBOLETOFIXO` + 2ª via. **Sem transação on-line.**
+1. **Fundação e inscrição:** hot site, autenticação, cadastro, wizard, documentos,
+   boleto da taxa e comprovante.
+2. **Operação e CRM:** criação de deals, conciliação da taxa e atribuição de origem.
+3. **Matrícula on-line:** elegibilidade, dados pessoais, responsáveis, documentos,
+   planos, contrato/assinatura, efetivação e consulta por RA.
+4. **Reserva de matrícula:** emissão/segunda via do boleto de **R$ 2.200** e conciliação
+   das etapas `Cadastro de matrícula` e `Pré-matrícula` no RD Station.
+5. **Próximas evoluções:** HA com sessão/rate limit compartilhados, Portal do Aluno e
+   Portal do Professor.

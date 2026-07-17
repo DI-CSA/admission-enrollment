@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(pnpm lint)",
+      "Bash(pnpm lint:*)",
+      "Bash(pnpm build)",
+      "Bash(pnpm env:which)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git branch:*)",
+      "Bash(git stash list:*)",
+      "Bash(git ls-files:*)",
+      "Bash(dig:*)",
+      "Bash(curl -s -o /dev/null -w:*)",
+      "Bash(curl -sS -o /dev/null -w:*)",
+      "Bash(curl -fsS http://127.0.0.1:*)",
+      "Bash(curl -s http://127.0.0.1:*)",
+      "Bash(gcloud compute ssl-certificates describe:*)",
+      "Bash(gcloud compute backend-services get-health:*)",
+      "Bash(gcloud compute instances describe:*)",
+      "Bash(gcloud compute instances list:*)",
+      "Read(./docs/**)",
+      "Read(./plataforma/**)"
+    ],
+    "ask": [
+      "Bash(git push:*)",
+      "Bash(bash scripts/deploy-app.sh:*)",
+      "Bash(scripts/deploy-app.sh:*)",
+      "Bash(gcloud compute ssh:*)",
+      "Bash(gcloud compute scp:*)",
+      "Bash(node --env-file=.env.local scripts/simular-login.mjs:*)",
+      "Bash(node --env-file=.env.local scripts/totvs-reset-senha.mjs:*)",
+      "Bash(node --env-file=.env.local scripts/rdcrm-limpa-funil.mjs:*)",
+      "Bash(node --env-file=.env.local scripts/rdcrm-move-todas.mjs:*)",
+      "Bash(pnpm env:prod)",
+      "Bash(pnpm dev:prod)"
+    ],
+    "deny": [
+      "Bash(*--confirmo-producao*)",
+      "Read(./plataforma/.env.local)",
+      "Read(./plataforma/.env.prod)",
+      "Read(./plataforma/.env.homolog)",
+      "Read(./**/.env)",
+      "Read(./plataforma/scripts/discovery-out/**)",
+      "Read(./plataforma/scripts/.senha-backups/**)"
+    ]
+  }
+}

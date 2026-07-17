@@ -63,15 +63,14 @@ flowchart LR
     subgraph MKT[RD Station Marketing — núcleo hoje]
         L[Captação de leads] --> N[Nutrição / automações] --> O[Funil de contato]
     end
-    subgraph CRM[RD Station CRM — fase futura]
+    subgraph CRM[RD Station CRM — implementado]
         P[Pipeline de admissão] --> Q[Deals / origens / motivos de perda]
     end
     O -.->|oportunidade vira negociação| P
 ```
 
-- **Marketing** é o **núcleo agora**: captura, nutrição e funil de contato (ciclo de vida).
-- **CRM** entra **quando a equipe de admissão** for trabalhar os leads num pipeline de
-  vendas (recuperação de boleto não pago, acompanhamento de matrícula).
+- **Marketing:** captura, nutrição e linha do tempo dos eventos.
+- **CRM:** pipeline de admissão já alimentado pela inscrição e pelas conciliações do RM.
 
 ---
 
@@ -79,9 +78,21 @@ flowchart LR
 
 | Fase | Entrega | Status |
 | --- | --- | --- |
-| **Passo 1** | Eventos de funil via API Key (sem custo de dev de OAuth) | **Parcial** — 2 eventos ativos (`inscricao-iniciada`, `boleto-gerado`) |
+| **Passo 1** | Eventos de funil via API Key | **Ativo** |
 | **Passo 2** | OAuth + eventos de ciclo de vida e **e-commerce** (Checkout, Pedido Pago, Carrinho Abandonado) + webhooks | Planejado |
-| **Passo 3** | RD Station **CRM** (pipeline de matrícula, deals, automação de recuperação) | Planejado |
+| **Passo 3** | RD Station **CRM**: deals, taxa paga e etapas de matrícula | **Implementado** |
+
+O pipeline operacional é:
+
+```text
+Inscrito → Taxa paga → Prova/Entrevista →
+Cadastro de matrícula → Pré-matrícula → Matriculado
+```
+
+`Cadastro de matrícula` representa matrícula efetivada e boleto de reserva gerado.
+`Pré-matrícula` representa o pagamento da reserva de **R$ 2.200**. A aplicação concilia
+essas etapas pelo estado financeiro real do RM e ajusta o valor do deal para o produto
+“Reserva de matrícula”.
 
 > Hoje o disparo de eventos é **não-bloqueante**: qualquer falha do RD nunca interrompe a
 > inscrição do candidato.
@@ -100,9 +111,9 @@ flowchart LR
 
 ---
 
-## 7. O que precisa ser feito do lado do RD Station (parceiro)
+## 7. Configuração e operação no RD Station
 
-**Obrigatório para começar a medir já (Passo 1):**
+**Configuração-base:**
 
 1. Gerar o **token público (API Key)** numa conta administrador e nos repassar.
 2. Criar os **campos personalizados** (custom fields) para rótulos legíveis e segmentação:
@@ -111,11 +122,15 @@ flowchart LR
    `cf_valor_taxa`.
 3. Configurar o **funil de contato (lifecycle)** associando os identificadores de
    conversão (`inscricao-2027-<etapa>`) aos estágios Lead → Cliente.
+4. Manter no CRM as etapas `Inscrito`, `Taxa paga`, `Prova/Entrevista`,
+   `Cadastro de matrícula`, `Pré-matrícula` e `Matriculado`.
+5. Manter o produto “Reserva de matrícula” com valor de **R$ 2.200** e os campos
+   personalizados de pai, mãe, responsável financeiro e datas da matrícula/reserva.
 
 **Operação contínua de marketing:**
 
-4. **Segmentações** por série, etapa e "reconhecido vs. novo".
-5. **Automação de recuperação**: quem chegou a `boleto-gerado` e não a
+6. **Segmentações** por série, etapa e "reconhecido vs. novo".
+7. **Automação de recuperação**: quem chegou a `boleto-gerado` e não a
    `pagamento-confirmado` recebe lembrete da taxa.
 
 **Fases seguintes (decidir em conjunto):**

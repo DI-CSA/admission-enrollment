@@ -108,7 +108,17 @@ export const AVISO_PRIVACIDADE: DocumentoLegal = {
         {
           tipo: "p",
           texto:
-            "2. Cookies com dados de conexão e sessão ao portal RM do Sistema TOTVS. Estes são estritamente necessários para manter sua conexão durante o uso da área restrita do site. Nomes dos Cookies: ASPXAUT, ASP.NET_SessionId, CorporePrincipal, DefaultAlias, EduContextoAlunoResponsavelAPI, EduMascaras, RMAuthForm. Tempo máximo de vigência: enquanto a conexão estiver ativa, exceto o cookie \u201cDefaultAlias\u201d, que armazena o nome do Banco de Dados a ser conectado e que tem vigência de um ano.",
+            "2. Meta Pixel. Mediante seu consentimento para a categoria Marketing, é utilizado para medir a efetividade de campanhas e registrar eventos como visualização de página, conclusão de inscrição e efetivação de matrícula. Pode utilizar cookies como \u201c_fbp\u201d e \u201c_fbc\u201d e compartilhar dados de evento com a Meta. A autorização pode ser revogada a qualquer momento no botão Privacidade.",
+        },
+        {
+          tipo: "p",
+          texto:
+            "3. RD Station. Mediante seu consentimento para a categoria Marketing, o script de rastreamento é utilizado para atribuir a origem da visita e das conversões de admissão. Pode utilizar o cookie \u201c__trf.src\u201d. Eventos transacionais necessários à operação do processo seletivo são tratados no servidor conforme as bases legais aplicáveis, sem depender do carregamento do script no navegador.",
+        },
+        {
+          tipo: "p",
+          texto:
+            "4. Cookies de consentimento e sessão. O cookie \u201ccsa_consent\u201d registra suas preferências por até um ano. O cookie \u201csid\u201d é estritamente necessário para manter a sessão autenticada no portal e possui duração limitada. Cookies técnicos do TOTVS podem ser usados no processamento server-side sem serem expostos diretamente ao navegador.",
         },
         {
           tipo: "sub",

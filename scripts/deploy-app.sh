@@ -15,6 +15,17 @@ PLAT="$REPO_ROOT/plataforma"
 # NEXT_PUBLIC_* precisa estar presente NO BUILD para ser embutido. Override via env.
 RD_TRACKING_UUID="${NEXT_PUBLIC_RD_TRACKING_UUID:-d57e1c47-68f2-4339-b5cf-4cdf1098d0e5}"
 
+# Meta Pixel ID (publico — vai no bundle do cliente). Precisa estar NO BUILD, senao o
+# componente <MetaPixel> nao monta em producao. Override via env. OBS.: a Conversions API
+# tambem le NEXT_PUBLIC_META_PIXEL_ID em RUNTIME, entao ela deve constar tambem no
+# /etc/csa-portal/.env da VM (junto do META_CAPI_TOKEN, que e secreto e NAO vai aqui).
+META_PIXEL_ID="${NEXT_PUBLIC_META_PIXEL_ID:-3032475493621321}"
+
+# UI de consentimento (banner de cookies). Default = false: SEM banner e integracoes
+# de marketing/analise carregam direto (consentimento implicito). Para reativar o banner:
+# NEXT_PUBLIC_CONSENTIMENTO_UI=true ./scripts/deploy-app.sh
+CONSENTIMENTO_UI="${NEXT_PUBLIC_CONSENTIMENTO_UI:-false}"
+
 # Flags de exibicao da matricula (NEXT_PUBLIC_* -> embutidas NO BUILD). Default = false
 # (oculta plano de pagamento e minuta do contrato ate os valores/minutas serem divulgados).
 # Override via env, ex.: NEXT_PUBLIC_MATRICULA_EXIBIR_PLANO_PAGAMENTO=true ./scripts/deploy-app.sh
@@ -40,6 +51,8 @@ echo "==> 3/5 pnpm install + build (na VM, com placeholders de env para o build)
   TOTVS_DB_SERVER=build TOTVS_DB_USER=build TOTVS_DB_PASSWORD=build TOTVS_DB_NAME=build \
   RM_API_BASE=http://build.invalid SESSION_SECRET=build-placeholder-000000000000000000000000000000 \
   NEXT_PUBLIC_RD_TRACKING_UUID=$RD_TRACKING_UUID \
+  NEXT_PUBLIC_META_PIXEL_ID=$META_PIXEL_ID \
+  NEXT_PUBLIC_CONSENTIMENTO_UI=$CONSENTIMENTO_UI \
   NEXT_PUBLIC_MATRICULA_EXIBIR_PLANO_PAGAMENTO=$MAT_EXIBIR_PLANO \
   NEXT_PUBLIC_MATRICULA_EXIBIR_MINUTA_CONTRATO=$MAT_EXIBIR_MINUTA \
   bash -lc 'cd $APP_DIR && pnpm install --frozen-lockfile && pnpm build'"

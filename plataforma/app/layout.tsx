@@ -1,8 +1,7 @@
 import type { Metadata } from "next";
 import { Inter, Outfit } from "next/font/google";
-import Script from "next/script";
 import "./globals.css";
-import MetaPixel from "@/components/MetaPixel";
+import TrackingConsent from "@/components/TrackingConsent";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -37,6 +36,11 @@ export default function RootLayout({
   // Google Analytics (GA4). O Measurement ID é público; usa env quando definido e
   // cai para o ID da conta CSA como padrão, garantindo o carregamento em produção.
   const gaId = process.env.NEXT_PUBLIC_GA_ID ?? "G-929XVXSEH2";
+  // Meta Pixel. O ID é público; usa env quando definido e cai para o ID da conta CSA
+  // como padrão, garantindo que o <MetaPixel> monte em produção mesmo se a env
+  // NEXT_PUBLIC_META_PIXEL_ID faltar no build (é embutida em build-time, não runtime).
+  const metaPixelId =
+    process.env.NEXT_PUBLIC_META_PIXEL_ID ?? "3032475493621321";
   return (
     <html
       lang="pt-BR"
@@ -44,30 +48,12 @@ export default function RootLayout({
       suppressHydrationWarning
     >
       <body className="min-h-full flex flex-col">
-        <MetaPixel />
+        <TrackingConsent
+          metaPixelId={metaPixelId}
+          gaId={gaId}
+          rdTrackingUuid={rdTrackingUuid}
+        />
         {children}
-        {gaId ? (
-          <>
-            <Script
-              id="ga-gtag-src"
-              src={`https://www.googletagmanager.com/gtag/js?id=${gaId}`}
-              strategy="afterInteractive"
-            />
-            <Script id="ga-gtag-init" strategy="afterInteractive">
-              {`window.dataLayer = window.dataLayer || [];
-function gtag(){dataLayer.push(arguments);}
-gtag('js', new Date());
-gtag('config', '${gaId}');`}
-            </Script>
-          </>
-        ) : null}
-        {rdTrackingUuid ? (
-          <Script
-            id="rd-station-tracking"
-            src={`https://d335luupugsy2.cloudfront.net/js/loader-scripts/${rdTrackingUuid}-loader.js`}
-            strategy="afterInteractive"
-          />
-        ) : null}
       </body>
     </html>
   );

@@ -5,6 +5,8 @@ import { CpfInput } from "@/components/CpfInput";
 import { cpfValido } from "@/lib/cpf";
 import { formatarTelefone } from "@/lib/telefone";
 import { ANO_PROCESSO } from "@/lib/processos";
+import { rastrearEventoMeta } from "@/lib/marketing/meta-client";
+import { eventIdInscricao } from "@/lib/marketing/meta-event-id";
 
 type Etapa =
   | "candidato"
@@ -683,6 +685,18 @@ export function WizardInscricao({
 
       setResultado(data);
       setEtapa("resultado");
+      if (data.numeroInscricao && serieSel) {
+        rastrearEventoMeta(
+          "CompleteRegistration",
+          {
+            content_name: "Inscrição no processo seletivo",
+            content_category: "inscricao",
+            content_ids: [String(data.numeroInscricao)],
+            status: true,
+          },
+          eventIdInscricao(serieSel.idps, data.numeroInscricao),
+        );
+      }
     } catch {
       setErro("Não foi possível concluir agora. Tente novamente.");
       setEtapa("revisao");

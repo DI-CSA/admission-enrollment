@@ -11,6 +11,8 @@ import {
 } from "@/lib/matricula-flags";
 import type { MatriculaResumo } from "@/components/DetalhesMatricula";
 import { LinhaDigitavelBoleto } from "@/components/LinhaDigitavelBoleto";
+import { rastrearEventoMeta } from "@/lib/marketing/meta-client";
+import { eventIdMatricula } from "@/lib/marketing/meta-event-id";
 // ---------------------------------------------------------------------------
 // Tipos (espelham lib/totvs/matricula.ts — redefinidos aqui porque aquele
 // módulo é server-only e não pode ser importado em componente cliente).
@@ -1528,6 +1530,16 @@ export function WizardMatricula({
         planoDescricao,
         dataHora: new Date().toISOString(),
       });
+      rastrearEventoMeta(
+        "CompleteRegistration",
+        {
+          content_name: "Matrícula efetivada",
+          content_category: "matricula",
+          content_ids: [String(numeroInscricao)],
+          status: true,
+        },
+        eventIdMatricula(idps, numeroInscricao),
+      );
     } catch {
       setErroPasso("Não foi possível concluir a matrícula. Tente novamente.");
     } finally {

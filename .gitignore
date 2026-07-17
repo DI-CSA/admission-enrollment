@@ -10,6 +10,9 @@ dist/
 .env.local
 .env.*.local
 
+# Dados sensíveis de teste (CPFs e senhas reais) — nunca versionar
+docs/testes-homolog.md
+
 # Sistema operacional / editor
 .DS_Store
 *.log

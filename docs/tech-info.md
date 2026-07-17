@@ -11,7 +11,7 @@ Nome da instancia - IP na rede VPC - IP externo
 totvs-app01 - 10.10.0.15 - 35.247.234.33
 totvs-db01 - 10.10.0.2 - 35.199.126.125
 totvs-web01 - 10.10.0.24 - 35.247.225.83
-ztotvs-db01v2 - 10.10.0.3 - 34.39.233.215
+ztotvs-db01v2 - 10.10.0.3 - 34.95.249.181
 totvs-web02 - 10.10.0.48 - 35.199.106.238
 
 Obs.: A instancia ztotvs-db01v2 é o servidor onde está a base HomologacaoRM

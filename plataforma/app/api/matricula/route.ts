@@ -9,6 +9,8 @@ import {
 } from "@/lib/totvs/matricula";
 import { reconciliarSenhaPosMatricula } from "@/lib/totvs/senha-ps";
 import { conciliarMatriculas } from "@/lib/marketing/conciliar-matriculas";
+import { registrarEventoMetaServidor } from "@/lib/marketing/meta-capi";
+import { eventIdMatricula } from "@/lib/marketing/meta-event-id";
 
 export const dynamic = "force-dynamic";
 
@@ -160,6 +162,15 @@ export async function POST(req: NextRequest) {
       void conciliarMatriculas({
         apenasInscricao: { numeroInscricao, idps },
       }).catch((e) => console.error("[matricula] conciliação RD falhou:", e));
+
+      void registrarEventoMetaServidor({
+        nome: "CompleteRegistration",
+        eventId: eventIdMatricula(idps, numeroInscricao),
+        req,
+        contentName: "Matrícula efetivada",
+        contentCategory: "matricula",
+        contentIds: [String(numeroInscricao)],
+      });
     }
 
     return NextResponse.json(

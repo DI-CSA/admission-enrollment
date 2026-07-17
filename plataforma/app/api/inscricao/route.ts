@@ -24,6 +24,8 @@ import {
 import { registrarEventoFunil } from "@/lib/marketing/rdstation";
 import { extrairOrigem } from "@/lib/marketing/origem";
 import { registrarNegociacaoInscricao } from "@/lib/marketing/rdcrm";
+import { registrarEventoMetaServidor } from "@/lib/marketing/meta-capi";
+import { eventIdInscricao } from "@/lib/marketing/meta-event-id";
 import {
   definirSenhaPSporCpf,
   lerEnvelopeSenhaPSporCpf,
@@ -1018,6 +1020,21 @@ export async function POST(req: NextRequest) {
       respFinanceiroTelefone: rfTelefone,
       idLan: idLanTaxa,
     });
+
+    if (resultado.numeroInscricao != null) {
+      void registrarEventoMetaServidor({
+        nome: "CompleteRegistration",
+        eventId: eventIdInscricao(idps, resultado.numeroInscricao),
+        req,
+        email: emailContato,
+        telefone: telefoneContato,
+        valor: ctx.valorInscricao,
+        moeda: "BRL",
+        contentName: "Inscrição no processo seletivo",
+        contentCategory: "inscricao",
+        contentIds: [String(resultado.numeroInscricao)],
+      });
+    }
 
     const res = NextResponse.json({
       ok: true,
