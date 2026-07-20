@@ -88,6 +88,82 @@ export function extrairIdLanDoNome(nome: string): string | null {
 }
 
 /**
+ * Token de reconciliação da VISITA embutido no nome: `[VIS:<agendamento_id>]`.
+ * Mesma ideia do `[LAN:...]`: chave estável para localizar/avançar o deal da
+ * visita de forma idempotente (o id é o uuid do agendamento no schema agos).
+ */
+export function tokenVisita(agendamentoId: string): string {
+  return `[VIS:${String(agendamentoId).trim()}]`;
+}
+
+/** Extrai o id do agendamento do token `[VIS:<uuid>]` no nome; null se ausente. */
+export function extrairIdVisitaDoNome(nome: string): string | null {
+  const m = /\[VIS:([0-9a-fA-F-]{8,})\]/.exec(nome);
+  return m ? m[1] : null;
+}
+
+/**
+ * Cria a negociação de uma VISITA no funil (etapa "Visita agendada" ou, se já
+ * compareceu, "Visita realizada"). Idempotência pelo token `[VIS:<id>]` no nome
+ * (o chamador verifica antes se já existe). Retorna o id do deal criado, ou null.
+ * Nunca lança: em falha registra log e retorna null.
+ */
+export async function criarNegociacaoVisita(v: {
+  agendamentoId: string;
+  nome: string;
+  email?: string | null;
+  telefone?: string | null;
+  segmento?: string | null;
+  dealStageId: string;
+}): Promise<string | null> {
+  const token = process.env.RD_CRM_TOKEN;
+  const nomeNegociacao = `Visita — ${v.nome.trim()} ${tokenVisita(v.agendamentoId)}`;
+  if (!token) {
+    console.info("[rdcrm] (stub — RD_CRM_TOKEN ausente) visita:", nomeNegociacao);
+    return null;
+  }
+
+  const dealCustomFields: Array<{ custom_field_id: string; value: string }> = [];
+  const cfSerieId = process.env.RD_CRM_CF_SERIE_ID;
+  if (cfSerieId && v.segmento) {
+    dealCustomFields.push({ custom_field_id: cfSerieId, value: v.segmento });
+  }
+
+  const payload = {
+    deal: {
+      name: nomeNegociacao,
+      deal_stage_id: v.dealStageId,
+      ...(dealCustomFields.length ? { deal_custom_fields: dealCustomFields } : {}),
+    },
+    contacts: [
+      {
+        name: v.nome.trim(),
+        ...(v.email ? { emails: [{ email: v.email.trim() }] } : {}),
+        ...(v.telefone ? { phones: [{ phone: v.telefone.trim() }] } : {}),
+      },
+    ],
+    deal_source: { name: process.env.RD_SOURCE_PADRAO ?? "Portal de Inscrição" },
+  };
+
+  try {
+    const res = await fetch(`${RD_CRM_DEALS_URL}?token=${encodeURIComponent(token)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      console.warn("[rdcrm] criar visita não-OK:", res.status, nomeNegociacao);
+      return null;
+    }
+    const body = (await res.json()) as { id?: string; _id?: string };
+    return String(body.id ?? body._id ?? "") || null;
+  } catch (e) {
+    console.warn("[rdcrm] falha ao criar visita:", nomeNegociacao, e);
+    return null;
+  }
+}
+
+/**
  * Registra a negociação da inscrição no RD Station CRM. Nunca lança exceção: em
  * qualquer falha apenas registra log. Chamar do BFF após a taxa ser gerada.
  */
