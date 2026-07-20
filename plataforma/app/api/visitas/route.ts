@@ -6,6 +6,7 @@ import {
   marcarMktSincronizado,
 } from "@/lib/agenda/visitas";
 import { dispararEventosVisita } from "@/lib/agenda/marketing";
+import { enviarAlertaVisita } from "@/lib/notificacoes/email-visita";
 import { extrairOrigem } from "@/lib/marketing/origem";
 import { consumir } from "@/lib/rate-limit";
 import { telefoneValido } from "@/lib/telefone";
@@ -109,6 +110,23 @@ export async function POST(req: NextRequest) {
       await marcarMktSincronizado(visita.id);
     } catch (e) {
       console.warn("[visitas] falha ao espelhar no marketing:", e);
+    }
+
+    // Alerta interno para a secretaria (com BCC de acompanhamento) — best-effort,
+    // nunca quebra a confirmação da visita.
+    try {
+      await enviarAlertaVisita({
+        nome,
+        email,
+        telefone: telefone || null,
+        segmento,
+        participantes,
+        inicio: visita.inicio,
+        fim: visita.fim,
+        local: visita.local,
+      });
+    } catch (e) {
+      console.warn("[visitas] falha ao enviar alerta de e-mail:", e);
     }
 
     return NextResponse.json({
