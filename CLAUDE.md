@@ -92,7 +92,9 @@ em [docs/tech-info.md](docs/tech-info.md).
 - [integracao_rd_station.md](docs/integracao_rd_station.md) — funil, campos e conciliações RD.
 - [resumo-estrategico-rd-station.md](docs/resumo-estrategico-rd-station.md) — visão executiva do RD.
 - [integracao_meta.md](docs/integracao_meta.md) — Meta Pixel + CAPI + consentimento.
+- [estrategia-marketing-google-rd-station.md](docs/estrategia-marketing-google-rd-station.md) — estratégia de captação/marketing/CRM (Google + RD, nível ouro).
 - [plano-matricula-online-candidatos-aprovados.md](docs/plano-matricula-online-candidatos-aprovados.md) — plano do módulo de matrícula.
+- [agendador-visitas.md](docs/agendador-visitas.md) — agendador de visitas (store Postgres próprio + funil de marketing).
 - [guia_hotsite_csa_leblon_2027.md](docs/guia_hotsite_csa_leblon_2027.md) — guia visual/conteúdo do hotsite.
 - [guia_customizacao_portal_processo_seletivo_totvs.md](docs/guia_customizacao_portal_processo_seletivo_totvs.md) — customização oficial TOTVS (FrameHTML).
 - [testes-homolog.md](docs/testes-homolog.md) — contas/CPFs de teste ⚠️ contém dados sensíveis.

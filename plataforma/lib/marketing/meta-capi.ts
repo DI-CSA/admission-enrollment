@@ -12,6 +12,7 @@ const GRAPH_VERSION = process.env.META_GRAPH_API_VERSION?.trim() || "v23.0";
 
 type NomeEventoMeta =
   | "Lead"
+  | "Schedule"
   | "InitiateCheckout"
   | "CompleteRegistration"
   | "Purchase";

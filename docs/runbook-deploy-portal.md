@@ -286,6 +286,9 @@ Caminhos importantes na VM:
 - [ ] `MATRICULA_SOMENTE_LEITURA=false` somente com WebAPI e SQL apontando para o ambiente correto.
 - [ ] `CRON_SECRET` configurado; rotas de jobs recusam chamadas sem o cabeçalho correto.
 - [ ] IDs de etapas, produto de reserva e campos de matrícula do RD CRM configurados.
+- [ ] Agendador de visitas: `DATABASE_URL` (Cloud SQL, banco `csa`, schema `agos`) no `.env`
+      da VM; `5432` liberado só da VM. As tabelas são da AGOS — **não** rodar
+      `visitas:migrate` em produção. Detalhes em [agendador-visitas.md](agendador-visitas.md).
 - [ ] `/etc/csa-portal/.env` com perms `600`, dono `csaportal`.
 - [ ] VM sem IP externo (confirmado); SSH só por IAP; SQL liberado só da VM (`10.10.0.20`).
 - [ ] Certificado(s) gerenciado(s) `ACTIVE`; HTTP redireciona para HTTPS.

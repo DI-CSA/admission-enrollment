@@ -13,6 +13,7 @@
     "env:which": "readlink .env.local && echo '(perfil ativo)' || echo '.env.local é arquivo comum (não é symlink de perfil)'",
     "dev:homolog": "pnpm env:homolog && next dev",
     "dev:prod": "pnpm env:prod && next dev",
+    "visitas:migrate": "node --env-file=.env.local scripts/visitas-migrate.mjs",
     "rm:discovery": "node --env-file=.env.local scripts/rm-discovery.mjs",
     "totvs:probe": "node --env-file=.env.local scripts/totvs-sql-probe.mjs",
     "totvs:ps": "node --env-file=.env.local scripts/totvs-ps-list.mjs"
@@ -21,6 +22,7 @@
     "bcryptjs": "^3.0.3",
     "mssql": "^12",
     "next": "16.2.9",
+    "pg": "^8.22.0",
     "react": "19.2.4",
     "react-dom": "19.2.4"
   },
@@ -28,6 +30,7 @@
     "@tailwindcss/postcss": "^4",
     "@types/mssql": "^12.3.0",
     "@types/node": "^20",
+    "@types/pg": "^8.20.0",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",

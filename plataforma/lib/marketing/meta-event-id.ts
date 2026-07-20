@@ -6,3 +6,7 @@ export function eventIdMatricula(idps: number, numeroInscricao: number): string 
   return `matricula-${idps}-${numeroInscricao}`;
 }
 
+export function eventIdVisita(id: string): string {
+  return `visita-${id}`;
+}
+

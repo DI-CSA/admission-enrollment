@@ -40,12 +40,20 @@ export function SiteHeader() {
           </Link>
         </nav>
 
-        <Link
-          href="/#processos"
-          className="ml-3 shrink-0 whitespace-nowrap rounded-full bg-csa-amarelo px-5 py-2 font-display text-sm font-bold uppercase tracking-wide text-csa-navy shadow-sm transition hover:bg-csa-dourado"
-        >
-          Inscreva-se
-        </Link>
+        <div className="ml-3 flex shrink-0 items-center gap-2">
+          <Link
+            href="/agendar-visita"
+            className="hidden whitespace-nowrap rounded-full border-2 border-csa-navy px-5 py-2 font-display text-sm font-bold uppercase tracking-wide text-csa-navy transition hover:bg-csa-navy hover:text-white sm:inline-flex"
+          >
+            Marque uma visita
+          </Link>
+          <Link
+            href="/#processos"
+            className="whitespace-nowrap rounded-full bg-csa-amarelo px-5 py-2 font-display text-sm font-bold uppercase tracking-wide text-csa-navy shadow-sm transition hover:bg-csa-dourado"
+          >
+            Inscreva-se
+          </Link>
+        </div>
       </div>
     </header>
   );

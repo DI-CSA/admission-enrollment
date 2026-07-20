@@ -21,6 +21,10 @@ export interface OrigemLead {
   trafficSource?: string;
   trafficMedium?: string;
   trafficCampaign?: string;
+  /** Click IDs do Google Ads, p/ Offline Conversion Import (ver estratégia §5/§7). */
+  gclid?: string;
+  wbraid?: string;
+  gbraid?: string;
 }
 
 /** Extrai os dados de origem da requisição (cookie de rastreamento do RD + UTMs). */
@@ -48,6 +52,21 @@ export function extrairOrigem(req: NextRequest): OrigemLead {
   if (utmSource) origem.trafficSource = utmSource;
   if (utmMedium) origem.trafficMedium = utmMedium;
   if (utmCampaign) origem.trafficCampaign = utmCampaign;
+
+  // Click IDs do Google Ads (query da landing) ou persistidos em cookie de 1ª parte.
+  const gclid =
+    url.searchParams.get("gclid") ?? req.cookies.get("gclid")?.value ?? undefined;
+  const wbraid =
+    url.searchParams.get("wbraid") ??
+    req.cookies.get("wbraid")?.value ??
+    undefined;
+  const gbraid =
+    url.searchParams.get("gbraid") ??
+    req.cookies.get("gbraid")?.value ??
+    undefined;
+  if (gclid) origem.gclid = gclid;
+  if (wbraid) origem.wbraid = wbraid;
+  if (gbraid) origem.gbraid = gbraid;
 
   return origem;
 }

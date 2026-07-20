@@ -134,6 +134,11 @@ export function SiteFooter() {
                 Edital — 2º Ano do Fund. à 2ª Série do Médio
               </a>
             </li>
+            <li>
+              <a href="/agendar-visita" className="hover:text-white">
+                Marque uma visita
+              </a>
+            </li>
           </ul>
         </div>
       </div>

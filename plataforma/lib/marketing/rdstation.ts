@@ -29,6 +29,8 @@ const SOURCE_PADRAO = process.env.RD_SOURCE_PADRAO ?? "Portal de Inscrição";
  * distinto no RD Station e alimenta o estudo de percurso/abandono.
  */
 export type EtapaFunil =
+  | "visita-agendada" // topo: visita marcada pelo agendador (lib/agenda)
+  | "visita-realizada" // visita compareceu (marcada pela secretaria)
   | "lead-captado" // topo: formulário de interesse (LeadModal — Fase 1)
   | "login-responsavel" // responsável JÁ CADASTRADO autenticou (1x por sessão)
   | "cadastro-novo-responsavel" // NOVO responsável criou conta (1ª inscrição)

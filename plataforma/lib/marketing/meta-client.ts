@@ -3,6 +3,7 @@
 export type EventoMetaPadrao =
   | "PageView"
   | "Lead"
+  | "Schedule"
   | "InitiateCheckout"
   | "CompleteRegistration"
   | "Purchase";

@@ -44,6 +44,12 @@ export function Hero() {
               Quero me inscrever
             </a>
             <a
+              href="/agendar-visita"
+              className="rounded-full border border-csa-ciano bg-csa-ciano/10 px-7 py-3 font-semibold text-white transition hover:bg-csa-ciano/20"
+            >
+              Marque uma visita
+            </a>
+            <a
               href="https://www.csa.com.br/tour"
               target="_blank"
               rel="noopener noreferrer"
