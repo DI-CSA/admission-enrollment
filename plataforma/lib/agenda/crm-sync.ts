@@ -53,11 +53,17 @@ export async function sincronizarVisitasCrm(): Promise<ResultadoSyncVisitas> {
     telefone: string | null;
     segmento: string | null;
     status: string;
+    origem_contato: string;
+    tipo_publico: boolean | null;
+    tipo_nome: string | null;
   }>(
-    `SELECT id, nome, email, telefone, segmento, status
-       FROM visita_agendamento
-      WHERE status <> 'cancelada'
-      ORDER BY criado_em ASC`,
+    `SELECT a.id, a.nome, a.email, a.telefone, a.segmento, a.status,
+            a.origem_contato, t.publico AS tipo_publico, t.nome AS tipo_nome
+       FROM visita_agendamento a
+       JOIN visita_slot s ON s.id = a.slot_id
+       LEFT JOIN visita_tipo t ON t.id = s.tipo_id
+      WHERE a.status <> 'cancelada'
+      ORDER BY a.criado_em ASC`,
   );
 
   let criados = 0;
@@ -65,6 +71,22 @@ export async function sincronizarVisitasCrm(): Promise<ResultadoSyncVisitas> {
   for (const b of bookings) {
     const existente = porVisita.get(b.id);
     const realizada = b.status === "realizada";
+    // Origem, para discernir no RD (nome do deal + deal_source, filtrável):
+    //  - tipo interno (ex.: Atendimento ao cliente) → usa o nome do tipo;
+    //  - tipo público via portal (origem_contato='portal') → "Visita (Portal)";
+    //  - tipo público via secretaria (cadastro manual) → "Visita (Secretaria)".
+    const interno = b.tipo_publico === false;
+    const viaPortal = b.origem_contato === "portal";
+    const titulo = interno
+      ? b.tipo_nome || "Atendimento ao cliente"
+      : viaPortal
+        ? "Visita (Portal)"
+        : "Visita (Secretaria)";
+    const sourceName = interno
+      ? b.tipo_nome || "Atendimento ao cliente"
+      : viaPortal
+        ? "Portal — Agendamento de visita"
+        : "Secretaria — Agendamento de visita";
     if (!existente) {
       const id = await criarNegociacaoVisita({
         agendamentoId: b.id,
@@ -73,6 +95,8 @@ export async function sincronizarVisitasCrm(): Promise<ResultadoSyncVisitas> {
         telefone: b.telefone,
         segmento: b.segmento,
         dealStageId: realizada ? REALIZADA : AGENDADA,
+        titulo,
+        sourceName,
       });
       if (id) criados++;
     } else if (realizada && existente.dealStageId === AGENDADA) {

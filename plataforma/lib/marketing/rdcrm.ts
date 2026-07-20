@@ -115,9 +115,14 @@ export async function criarNegociacaoVisita(v: {
   telefone?: string | null;
   segmento?: string | null;
   dealStageId: string;
+  /** Rótulo de origem no NOME do deal (ex.: "Visita (Portal)", "Atendimento ao cliente"). */
+  titulo?: string;
+  /** Origem do deal (deal_source, filtrável no RD). */
+  sourceName?: string;
 }): Promise<string | null> {
   const token = process.env.RD_CRM_TOKEN;
-  const nomeNegociacao = `Visita — ${v.nome.trim()} ${tokenVisita(v.agendamentoId)}`;
+  const titulo = v.titulo?.trim() || "Visita";
+  const nomeNegociacao = `${titulo} — ${v.nome.trim()} ${tokenVisita(v.agendamentoId)}`;
   if (!token) {
     console.info("[rdcrm] (stub — RD_CRM_TOKEN ausente) visita:", nomeNegociacao);
     return null;
@@ -142,7 +147,9 @@ export async function criarNegociacaoVisita(v: {
         ...(v.telefone ? { phones: [{ phone: v.telefone.trim() }] } : {}),
       },
     ],
-    deal_source: { name: process.env.RD_SOURCE_PADRAO ?? "Portal de Inscrição" },
+    deal_source: {
+      name: v.sourceName?.trim() || process.env.RD_SOURCE_PADRAO || "Portal de Inscrição",
+    },
   };
 
   try {
