@@ -19,6 +19,34 @@ import {
   extrairIdVisitaDoNome,
 } from "@/lib/marketing/rdcrm";
 
+const SITUACAO_LABEL: Record<string, string> = {
+  agendada: "Agendada",
+  confirmada: "Confirmada",
+  realizada: "Compareceu",
+  no_show: "Não compareceu",
+};
+
+const ORIGEM_LABEL_CRM: Record<string, string> = {
+  portal: "Portal de inscrições",
+  telefone: "Telefone",
+  email: "E-mail",
+  whatsapp: "WhatsApp",
+  presencial: "Presencial",
+  outro: "Outro",
+  planilha: "Planilha (histórico)",
+};
+
+function fmtVisitaBr(d: Date | string): string {
+  return new Date(d).toLocaleString("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 export interface ResultadoSyncVisitas {
   habilitado: boolean;
   criados: number;
@@ -59,11 +87,22 @@ export async function sincronizarVisitasCrm(): Promise<ResultadoSyncVisitas> {
     segmento: string | null;
     status: string;
     origem_contato: string;
+    operador: string;
     tipo_publico: boolean | null;
     tipo_nome: string | null;
+    inicio: Date;
+    local: string | null;
+    participantes: string | null;
   }>(
     `SELECT a.id, a.nome, a.email, a.telefone, a.segmento, a.status,
-            a.origem_contato, t.publico AS tipo_publico, t.nome AS tipo_nome
+            a.origem_contato, a.operador,
+            t.publico AS tipo_publico, t.nome AS tipo_nome,
+            s.inicio AS inicio, s.local AS local,
+            (SELECT string_agg(
+                p.papel || ': ' || p.nome || COALESCE(' (' || p.serie || ')', ''),
+                '; ' ORDER BY p.criado_em)
+               FROM visita_participante p
+              WHERE p.agendamento_id = a.id) AS participantes
        FROM visita_agendamento a
        JOIN visita_slot s ON s.id = a.slot_id
        LEFT JOIN visita_tipo t ON t.id = s.tipo_id
@@ -105,6 +144,14 @@ export async function sincronizarVisitasCrm(): Promise<ResultadoSyncVisitas> {
         dealStageId: realizada ? REALIZADA : AGENDADA,
         titulo,
         sourceName,
+        // Dados completos do agendamento (viram campos personalizados do deal).
+        dataHora: b.inicio ? fmtVisitaBr(b.inicio) : null,
+        tipo: b.tipo_nome,
+        situacao: SITUACAO_LABEL[b.status] ?? b.status,
+        operador: b.operador,
+        participantes: b.participantes,
+        local: b.local,
+        origem: ORIGEM_LABEL_CRM[b.origem_contato] ?? b.origem_contato,
       });
       if (id) criados++;
     } else if (realizada && existente.dealStageId === AGENDADA) {

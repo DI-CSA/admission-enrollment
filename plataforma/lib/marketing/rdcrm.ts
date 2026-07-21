@@ -119,6 +119,22 @@ export async function criarNegociacaoVisita(v: {
   titulo?: string;
   /** Origem do deal (deal_source, filtrável no RD). */
   sourceName?: string;
+  // Dados completos do agendamento — gravados como CAMPOS PERSONALIZADOS do deal
+  // (cada um só é enviado quando o respectivo UUID está configurado no ambiente).
+  /** Data/hora da visita, já formatada "dd/mm/aaaa HH:mm". */
+  dataHora?: string | null;
+  /** Tipo da visita (ex.: "Visitação Guiada"). */
+  tipo?: string | null;
+  /** Situação (Agendada/Confirmada/Compareceu/Não compareceu). */
+  situacao?: string | null;
+  /** Operador/origem do registro (quem cadastrou). */
+  operador?: string | null;
+  /** Participantes ("Pai: João; Candidato: Pedro (1º ano)"). */
+  participantes?: string | null;
+  /** Local da visita. */
+  local?: string | null;
+  /** Canal do contato (rótulo legível). */
+  origem?: string | null;
 }): Promise<string | null> {
   const token = process.env.RD_CRM_TOKEN;
   const titulo = v.titulo?.trim() || "Visita";
@@ -128,11 +144,22 @@ export async function criarNegociacaoVisita(v: {
     return null;
   }
 
+  // Campos personalizados: cada um só entra quando seu UUID está no ambiente.
   const dealCustomFields: Array<{ custom_field_id: string; value: string }> = [];
-  const cfSerieId = process.env.RD_CRM_CF_SERIE_ID;
-  if (cfSerieId && v.segmento) {
-    dealCustomFields.push({ custom_field_id: cfSerieId, value: v.segmento });
-  }
+  const pushCf = (envKey: string, value?: string | null) => {
+    const id = process.env[envKey]?.trim();
+    if (id && value && value.trim()) {
+      dealCustomFields.push({ custom_field_id: id, value: value.trim() });
+    }
+  };
+  pushCf("RD_CRM_CF_SERIE_ID", v.segmento);
+  pushCf("RD_CRM_CF_VISITA_DATA_ID", v.dataHora);
+  pushCf("RD_CRM_CF_VISITA_TIPO_ID", v.tipo);
+  pushCf("RD_CRM_CF_VISITA_SITUACAO_ID", v.situacao);
+  pushCf("RD_CRM_CF_VISITA_OPERADOR_ID", v.operador);
+  pushCf("RD_CRM_CF_VISITA_PARTICIPANTES_ID", v.participantes);
+  pushCf("RD_CRM_CF_VISITA_LOCAL_ID", v.local);
+  pushCf("RD_CRM_CF_VISITA_ORIGEM_ID", v.origem);
 
   const payload = {
     deal: {
