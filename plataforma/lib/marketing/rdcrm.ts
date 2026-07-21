@@ -102,6 +102,72 @@ export function extrairIdVisitaDoNome(nome: string): string | null {
   return m ? m[1] : null;
 }
 
+/** Dados do agendamento que viram campos personalizados do deal de visita. */
+export interface DadosVisitaCf {
+  segmento?: string | null;
+  dataHora?: string | null;
+  tipo?: string | null;
+  situacao?: string | null;
+  operador?: string | null;
+  participantes?: string | null;
+  local?: string | null;
+  origem?: string | null;
+}
+
+/** Monta os campos personalizados da visita (só os que têm UUID no ambiente). */
+function montarCamposVisitaCf(
+  d: DadosVisitaCf,
+): Array<{ custom_field_id: string; value: string }> {
+  const cf: Array<{ custom_field_id: string; value: string }> = [];
+  const push = (envKey: string, value?: string | null) => {
+    const id = process.env[envKey]?.trim();
+    if (id && value && value.trim()) cf.push({ custom_field_id: id, value: value.trim() });
+  };
+  push("RD_CRM_CF_SERIE_ID", d.segmento);
+  push("RD_CRM_CF_VISITA_DATA_ID", d.dataHora);
+  push("RD_CRM_CF_VISITA_TIPO_ID", d.tipo);
+  push("RD_CRM_CF_VISITA_SITUACAO_ID", d.situacao);
+  push("RD_CRM_CF_VISITA_OPERADOR_ID", d.operador);
+  push("RD_CRM_CF_VISITA_PARTICIPANTES_ID", d.participantes);
+  push("RD_CRM_CF_VISITA_LOCAL_ID", d.local);
+  push("RD_CRM_CF_VISITA_ORIGEM_ID", d.origem);
+  return cf;
+}
+
+/**
+ * Atualiza os campos personalizados de um deal de visita já existente
+ * (PUT /deals/{id}). Usado para backfill e para manter a "situação" consistente
+ * quando o status muda. Nunca lança: em falha retorna false. Retorna false (no-op)
+ * quando não há nenhum campo a enviar.
+ */
+export async function atualizarCamposVisitaDeal(
+  dealId: string,
+  d: DadosVisitaCf,
+): Promise<boolean> {
+  const token = process.env.RD_CRM_TOKEN;
+  if (!token || !dealId) return false;
+  const cf = montarCamposVisitaCf(d);
+  if (!cf.length) return false;
+  try {
+    const res = await fetch(
+      `${RD_CRM_BASE}/deals/${encodeURIComponent(dealId)}?token=${encodeURIComponent(token)}`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ deal: { deal_custom_fields: cf } }),
+      },
+    );
+    if (!res.ok) {
+      console.warn("[rdcrm] atualizar campos visita não-OK:", res.status, dealId);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.warn("[rdcrm] falha ao atualizar campos visita:", dealId, e);
+    return false;
+  }
+}
+
 /**
  * Cria a negociação de uma VISITA no funil (etapa "Visita agendada" ou, se já
  * compareceu, "Visita realizada"). Idempotência pelo token `[VIS:<id>]` no nome
@@ -145,21 +211,7 @@ export async function criarNegociacaoVisita(v: {
   }
 
   // Campos personalizados: cada um só entra quando seu UUID está no ambiente.
-  const dealCustomFields: Array<{ custom_field_id: string; value: string }> = [];
-  const pushCf = (envKey: string, value?: string | null) => {
-    const id = process.env[envKey]?.trim();
-    if (id && value && value.trim()) {
-      dealCustomFields.push({ custom_field_id: id, value: value.trim() });
-    }
-  };
-  pushCf("RD_CRM_CF_SERIE_ID", v.segmento);
-  pushCf("RD_CRM_CF_VISITA_DATA_ID", v.dataHora);
-  pushCf("RD_CRM_CF_VISITA_TIPO_ID", v.tipo);
-  pushCf("RD_CRM_CF_VISITA_SITUACAO_ID", v.situacao);
-  pushCf("RD_CRM_CF_VISITA_OPERADOR_ID", v.operador);
-  pushCf("RD_CRM_CF_VISITA_PARTICIPANTES_ID", v.participantes);
-  pushCf("RD_CRM_CF_VISITA_LOCAL_ID", v.local);
-  pushCf("RD_CRM_CF_VISITA_ORIGEM_ID", v.origem);
+  const dealCustomFields = montarCamposVisitaCf(v);
 
   const payload = {
     deal: {

@@ -16,6 +16,7 @@ import {
   listarNegociacoesDoFunil,
   moverNegociacaoParaEtapa,
   criarNegociacaoVisita,
+  atualizarCamposVisitaDeal,
   extrairIdVisitaDoNome,
 } from "@/lib/marketing/rdcrm";
 
@@ -51,6 +52,7 @@ export interface ResultadoSyncVisitas {
   habilitado: boolean;
   criados: number;
   avancados: number;
+  atualizados: number;
   total: number;
 }
 
@@ -63,7 +65,7 @@ export async function sincronizarVisitasCrm(): Promise<ResultadoSyncVisitas> {
     !AGENDADA ||
     !REALIZADA
   ) {
-    return { habilitado: false, criados: 0, avancados: 0, total: 0 };
+    return { habilitado: false, criados: 0, avancados: 0, atualizados: 0, total: 0 };
   }
 
   // Mapa token [VIS:<id>] -> deal existente no funil.
@@ -115,6 +117,7 @@ export async function sincronizarVisitasCrm(): Promise<ResultadoSyncVisitas> {
 
   let criados = 0;
   let avancados = 0;
+  let atualizados = 0;
   for (const b of bookings) {
     const existente = porVisita.get(b.id);
     const realizada = b.status === "realizada";
@@ -134,32 +137,40 @@ export async function sincronizarVisitasCrm(): Promise<ResultadoSyncVisitas> {
       : viaPortal
         ? "Portal — Agendamento de visita"
         : "Secretaria — Agendamento de visita";
+    // Dados completos do agendamento → campos personalizados do deal.
+    const dados = {
+      segmento: b.segmento,
+      dataHora: b.inicio ? fmtVisitaBr(b.inicio) : null,
+      tipo: b.tipo_nome,
+      situacao: SITUACAO_LABEL[b.status] ?? b.status,
+      operador: b.operador,
+      participantes: b.participantes,
+      local: b.local,
+      origem: ORIGEM_LABEL_CRM[b.origem_contato] ?? b.origem_contato,
+    };
     if (!existente) {
       const id = await criarNegociacaoVisita({
         agendamentoId: b.id,
         nome: b.nome,
         email: b.email,
         telefone: b.telefone,
-        segmento: b.segmento,
         dealStageId: realizada ? REALIZADA : AGENDADA,
         titulo,
         sourceName,
-        // Dados completos do agendamento (viram campos personalizados do deal).
-        dataHora: b.inicio ? fmtVisitaBr(b.inicio) : null,
-        tipo: b.tipo_nome,
-        situacao: SITUACAO_LABEL[b.status] ?? b.status,
-        operador: b.operador,
-        participantes: b.participantes,
-        local: b.local,
-        origem: ORIGEM_LABEL_CRM[b.origem_contato] ?? b.origem_contato,
+        ...dados,
       });
       if (id) criados++;
-    } else if (realizada && existente.dealStageId === AGENDADA) {
-      // Só avança agendada → realizada. Se já passou (Inscrito+), não mexe.
-      const ok = await moverNegociacaoParaEtapa(existente.id, REALIZADA);
-      if (ok) avancados++;
+    } else {
+      // Deal já existe: atualiza os campos (backfill + mantém "situação" em dia)
+      // e avança agendada → realizada quando a secretaria marca comparecimento.
+      const ok = await atualizarCamposVisitaDeal(existente.id, dados);
+      if (ok) atualizados++;
+      if (realizada && existente.dealStageId === AGENDADA) {
+        const mov = await moverNegociacaoParaEtapa(existente.id, REALIZADA);
+        if (mov) avancados++;
+      }
     }
   }
 
-  return { habilitado: true, criados, avancados, total: bookings.length };
+  return { habilitado: true, criados, avancados, atualizados, total: bookings.length };
 }
