@@ -386,6 +386,54 @@ export async function registrarNegociacaoInscricao(
   // manter "source" consistente nos dois produtos. Override via RD_SOURCE_PADRAO.
   const dealSourceName = process.env.RD_SOURCE_PADRAO ?? "Portal de Inscrição";
 
+  // Deal único (opcional, atrás de VISITAS_DEAL_UNICO=true): se esta pessoa já
+  // tem um deal de VISITA (mesmo e-mail do responsável), REAPROVEITA esse deal —
+  // move para "Inscrito", acrescenta o nome/tokens da inscrição e os campos, em
+  // vez de criar um segundo deal. Assim a jornada (visita → inscrição) fica num
+  // único deal. Best-effort: se algo falhar, cai no fluxo normal de criação.
+  if (process.env.VISITAS_DEAL_UNICO === "true" && neg.emailResponsavel) {
+    const alvo = await buscarDealVisitaPorEmail(neg.emailResponsavel);
+    if (alvo) {
+      const nomeMerge = `${alvo.nome} · ${nomeNegociacao}`;
+      try {
+        const put = await fetch(
+          `${RD_CRM_BASE}/deals/${encodeURIComponent(alvo.id)}?token=${encodeURIComponent(token)}`,
+          {
+            method: "PUT",
+            headers: { "Content-Type": "application/json", Accept: "application/json" },
+            body: JSON.stringify({
+              deal: {
+                name: nomeMerge,
+                ...(dealStageId ? { deal_stage_id: dealStageId } : {}),
+                ...(dealCustomFields.length
+                  ? { deal_custom_fields: dealCustomFields }
+                  : {}),
+              },
+            }),
+          },
+        );
+        if (put.ok) {
+          for (const p of dealProducts) {
+            await fetch(
+              `${RD_CRM_BASE}/deals/${encodeURIComponent(alvo.id)}/deal_products?token=${encodeURIComponent(token)}`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json", Accept: "application/json" },
+                body: JSON.stringify({ deal_product: p }),
+              },
+            );
+          }
+          console.info("[rdcrm] inscrição vinculada à visita (deal único):", nomeMerge);
+          return;
+        }
+        console.warn("[rdcrm] merge visita→inscrição não-OK:", put.status, alvo.id);
+      } catch (e) {
+        console.warn("[rdcrm] falha no merge visita→inscrição:", alvo.id, e);
+      }
+      // Em falha, segue para a criação normal abaixo (não perde a inscrição).
+    }
+  }
+
   const payload = {
     deal,
     contacts: contatos,
@@ -551,6 +599,79 @@ export async function listarNegociacoesDoFunil(): Promise<NegociacaoCrm[]> {
     if (!hasMore) break;
   }
   return out;
+}
+
+/**
+ * Deal único: localiza o deal de VISITA de uma pessoa pelo e-mail do contato,
+ * para vincular a inscrição ao mesmo deal (jornada única no funil). Usa
+ * `GET /contacts?email=` (o único filtro por e-mail que o CRM respeita) e lê os
+ * `deals` do contato; para cada deal com token `[VIS:]` (e ainda SEM `[LAN:]`),
+ * confere a etapa via `GET /deals/{id}` e mantém só os que estão numa etapa de
+ * VISITA (agendada/realizada). Em empate, retorna o mais avançado (realizada >
+ * agendada; depois o mais recente). Nunca lança: em falha retorna null.
+ */
+export async function buscarDealVisitaPorEmail(
+  email: string,
+): Promise<{ id: string; nome: string; realizada: boolean } | null> {
+  const token = process.env.RD_CRM_TOKEN;
+  const AG = process.env.RD_CRM_DEAL_STAGE_VISITA_AGENDADA_ID?.trim();
+  const RE = process.env.RD_CRM_DEAL_STAGE_VISITA_REALIZADA_ID?.trim();
+  if (!token || !email || (!AG && !RE)) return null;
+  try {
+    const res = await fetch(
+      `${RD_CRM_BASE}/contacts?token=${encodeURIComponent(token)}&email=${encodeURIComponent(email.trim())}`,
+      { method: "GET", headers: { Accept: "application/json" } },
+    );
+    if (!res.ok) return null;
+    const body = (await res.json()) as unknown;
+    const contatos = Array.isArray(body)
+      ? (body as Array<Record<string, unknown>>)
+      : ((body as { contacts?: Array<Record<string, unknown>> })?.contacts ?? []);
+    const contato = contatos[0];
+    const deals = Array.isArray(contato?.deals)
+      ? (contato!.deals as Array<Record<string, unknown>>)
+      : [];
+    const candidatos = deals.filter((d) => {
+      const nome = typeof d?.name === "string" ? d.name : "";
+      return /\[VIS:/.test(nome) && !/\[LAN:/.test(nome);
+    });
+
+    const avaliados: Array<{ id: string; nome: string; realizada: boolean; quando: string }> = [];
+    for (const d of candidatos) {
+      const id = String(d.id ?? d._id ?? "");
+      if (!id) continue;
+      const det = await fetch(
+        `${RD_CRM_BASE}/deals/${encodeURIComponent(id)}?token=${encodeURIComponent(token)}`,
+        { method: "GET", headers: { Accept: "application/json" } },
+      );
+      if (!det.ok) continue;
+      const dd = (await det.json()) as {
+        name?: string;
+        deal_stage?: unknown;
+        updated_at?: string;
+        created_at?: string;
+      };
+      const stageId = extrairStageId(dd.deal_stage);
+      if (stageId !== AG && stageId !== RE) continue; // já saiu das etapas de visita
+      avaliados.push({
+        id,
+        nome: dd.name ?? (typeof d.name === "string" ? d.name : ""),
+        realizada: stageId === RE,
+        quando: dd.updated_at ?? dd.created_at ?? "",
+      });
+    }
+    if (avaliados.length === 0) return null;
+    avaliados.sort(
+      (a, b) =>
+        Number(b.realizada) - Number(a.realizada) ||
+        String(b.quando).localeCompare(String(a.quando)),
+    );
+    const alvo = avaliados[0];
+    return { id: alvo.id, nome: alvo.nome, realizada: alvo.realizada };
+  } catch (e) {
+    console.warn("[rdcrm] falha ao buscar visita por e-mail:", e);
+    return null;
+  }
 }
 
 /**
