@@ -6,6 +6,7 @@ import { cpfValido } from "@/lib/cpf";
 import { formatarTelefone } from "@/lib/telefone";
 import { ANO_PROCESSO } from "@/lib/processos";
 import { rastrearEventoMeta } from "@/lib/marketing/meta-client";
+import { rastrearConversaoInscricao } from "@/lib/marketing/google-ads";
 import { eventIdInscricao } from "@/lib/marketing/meta-event-id";
 
 type Etapa =
@@ -696,6 +697,8 @@ export function WizardInscricao({
           },
           eventIdInscricao(serieSel.idps, data.numeroInscricao),
         );
+        // Conversão "Inscrição Concluída" no Google Ads (client-side, value 1.0 BRL).
+        rastrearConversaoInscricao();
       }
     } catch {
       setErro("Não foi possível concluir agora. Tente novamente.");

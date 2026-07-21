@@ -26,6 +26,11 @@ META_PIXEL_ID="${NEXT_PUBLIC_META_PIXEL_ID:-3032475493621321}"
 # NEXT_PUBLIC_CONSENTIMENTO_UI=true ./scripts/deploy-app.sh
 CONSENTIMENTO_UI="${NEXT_PUBLIC_CONSENTIMENTO_UI:-false}"
 
+# Google Ads (publico — vai no bundle). Conta e label da conversao "Inscricao
+# Concluida" (fornecidos pela agencia). Precisam estar NO BUILD (NEXT_PUBLIC_*).
+GOOGLE_ADS_ID="${NEXT_PUBLIC_GOOGLE_ADS_ID:-AW-18269877759}"
+GADS_CONV_INSCRICAO="${NEXT_PUBLIC_GADS_CONVERSAO_INSCRICAO:-SiHMCJL42dMcEP_r4IdE}"
+
 # Flags de exibicao da matricula (NEXT_PUBLIC_* -> embutidas NO BUILD). Default = false
 # (oculta plano de pagamento e minuta do contrato ate os valores/minutas serem divulgados).
 # Override via env, ex.: NEXT_PUBLIC_MATRICULA_EXIBIR_PLANO_PAGAMENTO=true ./scripts/deploy-app.sh
@@ -53,6 +58,8 @@ echo "==> 3/5 pnpm install + build (na VM, com placeholders de env para o build)
   NEXT_PUBLIC_RD_TRACKING_UUID=$RD_TRACKING_UUID \
   NEXT_PUBLIC_META_PIXEL_ID=$META_PIXEL_ID \
   NEXT_PUBLIC_CONSENTIMENTO_UI=$CONSENTIMENTO_UI \
+  NEXT_PUBLIC_GOOGLE_ADS_ID=$GOOGLE_ADS_ID \
+  NEXT_PUBLIC_GADS_CONVERSAO_INSCRICAO=$GADS_CONV_INSCRICAO \
   NEXT_PUBLIC_MATRICULA_EXIBIR_PLANO_PAGAMENTO=$MAT_EXIBIR_PLANO \
   NEXT_PUBLIC_MATRICULA_EXIBIR_MINUTA_CONTRATO=$MAT_EXIBIR_MINUTA \
   bash -lc 'cd $APP_DIR && pnpm install --frozen-lockfile && pnpm build'"

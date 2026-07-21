@@ -17,6 +17,8 @@ const UM_ANO = 60 * 60 * 24 * 365;
 interface Props {
   metaPixelId?: string;
   gaId?: string;
+  /** Conta do Google Ads (AW-...), para conversões. Categoria: marketing. */
+  googleAdsId?: string;
   rdTrackingUuid?: string;
 }
 
@@ -40,6 +42,7 @@ function apagarCookie(nome: string) {
 export default function TrackingConsent({
   metaPixelId,
   gaId,
+  googleAdsId,
   rdTrackingUuid,
 }: Props) {
   const [preferencias, setPreferencias] =
@@ -92,6 +95,11 @@ export default function TrackingConsent({
       apagarCookie("_fbp");
       apagarCookie("_fbc");
       apagarCookie("__trf.src");
+      // Cookies de clique/atribuição do Google Ads.
+      for (const item of document.cookie.split("; ")) {
+        const nome = item.split("=")[0];
+        if (nome.startsWith("_gcl")) apagarCookie(nome);
+      }
     }
     if (!novoAnalytics) {
       for (const item of document.cookie.split("; ")) {
@@ -112,18 +120,20 @@ export default function TrackingConsent({
         <MetaPixel pixelId={metaPixelId} />
       ) : null}
 
-      {prefsEfetivas?.analytics && gaId ? (
+      {(prefsEfetivas?.analytics && gaId) ||
+      (prefsEfetivas?.marketing && googleAdsId) ? (
         <>
           <Script
             id="ga-gtag-src"
-            src={`https://www.googletagmanager.com/gtag/js?id=${gaId}`}
+            src={`https://www.googletagmanager.com/gtag/js?id=${gaId || googleAdsId}`}
             strategy="afterInteractive"
           />
           <Script id="ga-gtag-init" strategy="afterInteractive">
             {`window.dataLayer = window.dataLayer || [];
 function gtag(){dataLayer.push(arguments);}
 gtag('js', new Date());
-gtag('config', '${gaId}');`}
+${prefsEfetivas?.analytics && gaId ? `gtag('config', '${gaId}');` : ""}
+${prefsEfetivas?.marketing && googleAdsId ? `gtag('config', '${googleAdsId}');` : ""}`}
           </Script>
         </>
       ) : null}

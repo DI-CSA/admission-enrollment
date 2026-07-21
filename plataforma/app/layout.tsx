@@ -41,6 +41,10 @@ export default function RootLayout({
   // NEXT_PUBLIC_META_PIXEL_ID faltar no build (é embutida em build-time, não runtime).
   const metaPixelId =
     process.env.NEXT_PUBLIC_META_PIXEL_ID ?? "3032475493621321";
+  // Google Ads (conversões). O ID é público; usa env quando definido e cai para o
+  // ID da conta CSA como padrão (embutido em build-time, como o Pixel).
+  const googleAdsId =
+    process.env.NEXT_PUBLIC_GOOGLE_ADS_ID ?? "AW-18269877759";
   return (
     <html
       lang="pt-BR"
@@ -51,6 +55,7 @@ export default function RootLayout({
         <TrackingConsent
           metaPixelId={metaPixelId}
           gaId={gaId}
+          googleAdsId={googleAdsId}
           rdTrackingUuid={rdTrackingUuid}
         />
         {children}
