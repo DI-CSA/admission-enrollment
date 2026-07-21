@@ -63,6 +63,9 @@ export async function sincronizarVisitasCrm(): Promise<ResultadoSyncVisitas> {
        JOIN visita_slot s ON s.id = a.slot_id
        LEFT JOIN visita_tipo t ON t.id = s.tipo_id
       WHERE a.status <> 'cancelada'
+        -- Não espelha no RD os registros importados da planilha histórica
+        -- (origem 'planilha'): são leads antigos, muitos com e-mail placeholder.
+        AND a.origem_contato <> 'planilha'
       ORDER BY a.criado_em ASC`,
   );
 

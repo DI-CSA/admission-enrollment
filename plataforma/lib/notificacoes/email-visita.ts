@@ -87,7 +87,8 @@ export async function enviarAlertaVisita(d: DadosAlertaVisita): Promise<void> {
   }
 
   const para = process.env.VISITA_ALERTA_TO || "secretaria@csa.com.br";
-  const bcc = process.env.VISITA_ALERTA_BCC || "cesar@csa.com.br";
+  // BCC opcional de acompanhamento. Vazio/ausente = sem cópia oculta.
+  const bcc = process.env.VISITA_ALERTA_BCC?.trim() || undefined;
   const remetente = process.env.MAIL_FROM || process.env.SMTP_USER || para;
 
   // Link para o módulo de visitas na AGOS (se a base estiver configurada).
