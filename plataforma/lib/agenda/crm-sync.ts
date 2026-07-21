@@ -46,6 +46,11 @@ export async function sincronizarVisitasCrm(): Promise<ResultadoSyncVisitas> {
     if (vid) porVisita.set(vid, { id: d.id, dealStageId: d.dealStageId });
   }
 
+  // Sincroniza só o ciclo de admissão atual: visitas a partir de
+  // VISITAS_RD_SYNC_DESDE (padrão 2026-01-01 → admissão 2027; exclui as de 2025).
+  // Ignora também os importados sem e-mail real (placeholder @import.csa.invalid),
+  // que não têm contato para o CRM. Canceladas sempre fora.
+  const desde = process.env.VISITAS_RD_SYNC_DESDE?.trim() || "2026-01-01";
   const bookings = await query<{
     id: string;
     nome: string;
@@ -63,10 +68,10 @@ export async function sincronizarVisitasCrm(): Promise<ResultadoSyncVisitas> {
        JOIN visita_slot s ON s.id = a.slot_id
        LEFT JOIN visita_tipo t ON t.id = s.tipo_id
       WHERE a.status <> 'cancelada'
-        -- Não espelha no RD os registros importados da planilha histórica
-        -- (origem 'planilha'): são leads antigos, muitos com e-mail placeholder.
-        AND a.origem_contato <> 'planilha'
+        AND s.inicio >= $1::timestamptz
+        AND a.email NOT LIKE '%@import.csa.invalid'
       ORDER BY a.criado_em ASC`,
+    [desde],
   );
 
   let criados = 0;
