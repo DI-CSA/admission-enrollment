@@ -47,7 +47,10 @@ CREATE TABLE IF NOT EXISTS visita_agendamento (
   id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   slot_id            uuid NOT NULL REFERENCES visita_slot (id),
   nome               text NOT NULL,
-  email              text NOT NULL,
+  -- email é OPCIONAL: o portal público sempre envia, mas cadastros manuais na
+  -- AGOS e importações da planilha podem não ter e-mail (fica NULL — nunca
+  -- placeholder). O índice único parcial abaixo trata NULLs como distintos.
+  email              text,
   telefone           text,
   segmento           text,
   qtd_pessoas        integer NOT NULL DEFAULT 1 CHECK (qtd_pessoas > 0),

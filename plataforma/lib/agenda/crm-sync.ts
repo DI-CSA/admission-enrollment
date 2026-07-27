@@ -78,8 +78,8 @@ export async function sincronizarVisitasCrm(): Promise<ResultadoSyncVisitas> {
 
   // Sincroniza só o ciclo de admissão atual: visitas a partir de
   // VISITAS_RD_SYNC_DESDE (padrão 2026-01-01 → admissão 2027; exclui as de 2025).
-  // Ignora também os importados sem e-mail real (placeholder @import.csa.invalid),
-  // que não têm contato para o CRM. Canceladas sempre fora.
+  // Ignora também os agendamentos SEM e-mail (email IS NULL) — sem contato não há
+  // negociação útil no CRM. Canceladas sempre fora.
   const desde = process.env.VISITAS_RD_SYNC_DESDE?.trim() || "2026-01-01";
   const bookings = await query<{
     id: string;
@@ -110,7 +110,7 @@ export async function sincronizarVisitasCrm(): Promise<ResultadoSyncVisitas> {
        LEFT JOIN visita_tipo t ON t.id = s.tipo_id
       WHERE a.status <> 'cancelada'
         AND s.inicio >= $1::timestamptz
-        AND a.email NOT LIKE '%@import.csa.invalid'
+        AND a.email IS NOT NULL
       ORDER BY a.criado_em ASC`,
     [desde],
   );
