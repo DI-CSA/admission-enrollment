@@ -1,84 +1,100 @@
-# Integração RD Station — Marketing, CRM e Funil de Inscrição (CSA Leblon 2027)
+# Integração RD Station — Marketing, CRM e Funil de Admissão (CSA Leblon 2027)
 
-> Documento de arquitetura e operação da captura de leads e métricas de funil do
-> Portal de Inscrições. Cobre a **estratégia**, o **plano técnico em 3 passos**, o
-> **mapa de eventos**, as **métricas** e o **passo a passo do que configurar na
-> plataforma RD Station**. Escrito para o time técnico e para quem opera o RD.
+> Documento de arquitetura e operação da captura de contatos, do funil de admissão e das
+> negociações do Portal de Admissão. Descreve **o que o sistema faz hoje** (auditado
+> contra o código), **quais dados são de fato enviados ao RD**, **como operar a plataforma
+> RD** e uma **análise de boas práticas de marketing/CRM com sugestões de evolução**.
+> Escrito para o time técnico e para o parceiro que opera o RD Station.
 
-- **Última atualização:** 2026-07-06
-- **Produto-alvo:** RD Station Marketing (núcleo) + RD Station CRM (negociações)
-- **Status de implementação:** **Passo 1 ativo + CRM (deals) ativo.** A lib
-  `registrarEventoFunil()` (Conversões via API Key) está pronta e **4 eventos de funil
-  estão ativos**: `login-responsavel` (responsável já cadastrado autentica — 1x por
-  sessão), `cadastro-novo-responsavel` (novo responsável cria conta na 1ª inscrição),
-  `inscricao-iniciada` (responsável clica em "incluir candidato" e inicia o wizard) e
-  `boleto-gerado` (inscrição concluída, com contexto enriquecido — candidato, processo,
-  relação, responsável financeiro e valor da taxa). Os dois primeiros **diferenciam quem
-  retorna (login) de quem se cadastra pela 1ª vez**. A lib `registrarNegociacaoInscricao()`
-  **cria a negociação (deal) no RD Station CRM** a cada `boleto-gerado`, com contatos, valor
-  (produto) e **campos personalizados** de curso/série/relação/IDLAN. O evento de topo
-  `lead-captado` e a rota `POST /api/lead` (formulário de interesse) **ainda não existem**.
-  O evento de **abandono** ainda não é rastreado. Passo 2 (OAuth +
-  Events/Contacts/Funnels/Webhooks) planejado; marcar o deal como ganho/pago no pagamento
-  da taxa ainda **não** está implementado.
+- **Última atualização:** 2026-07-30 (revisão completa contra o código-fonte)
+- **Produtos-alvo:** RD Station **Marketing** (contatos + eventos de funil) e RD Station
+  **CRM** (negociações/deals do pipeline de admissão)
+- **Integrações correlatas:** Meta (Pixel + CAPI) — ver [integracao_meta.md](integracao_meta.md);
+  Google Ads (conversão de inscrição) — ver §9.
+
+## Estado atual da implementação (resumo executivo técnico)
+
+| Frente | Situação | Observação |
+| --- | --- | --- |
+| **Marketing — eventos de funil (API Key)** | ✅ **Ativo** | 8 eventos emitidos de fato (ver §4) |
+| **CRM — negociação da inscrição (deal)** | ✅ **Ativo** | criada no `boleto-gerado`, com **campos personalizados** (UUID) |
+| **CRM — conciliação de pagamento da taxa** | ✅ **Ativo** | cron 2×/dia move o deal p/ *Taxa paga* e dispara `pagamento-confirmado` |
+| **CRM — funil de pré-matrícula (reserva R$2.200)** | ✅ **Ativo** | cron horário move p/ *Cadastro de matrícula* / *Pré-matrícula* |
+| **Agendador de visitas → Marketing + CRM** | ✅ **Ativo** | evento `visita-agendada` + deal de visita + **deal único** (visita→inscrição) |
+| **Meta CAPI (visita)** | ✅ **Ativo** | evento `Schedule` sob consentimento |
+| **Google Ads — conversão "Inscrição Concluída"** | ✅ **Ativo** | client-side (gtag), sob consentimento de marketing |
+| **Rastreamento de origem (loader RD + UTM + gclid)** | ✅ **Ativo** | `client_tracking_id` do cookie `__trf.src` |
+| **Evento de topo `lead-captado` / rota `/api/lead`** | ❌ **Não existe** | declarado no type, **nunca emitido** (ver §4 e §10) |
+| **Evento intermediário `area-escolhida`** | ✅ **Ativo** | beacon no wizard ao escolher a série (mede abandono por segmento) |
+| **`visita-realizada` como evento de Marketing** | ✅ **Ativo** | emitido no cron de visitas na transição p/ *realizada* (§6.2/§8.3) |
+| **Retry/backoff dos eventos de Marketing** | ✅ **Ativo** | retentativa em 429/5xx e erro de rede (`lib/marketing/retry.ts`) |
+| **OAuth 2.0 + Events API + Webhooks (Passo 2)** | 🔜 **Planejado** | e-commerce nativo (Checkout/Order Paid/Abandoned Cart), Analytics |
+
+> **Autenticação hoje:** Marketing por **API Key** (endpoint de Conversões); CRM por
+> **token de instância** (API v1). OAuth ainda não é usado.
 
 ---
 
 ## 1. Por que isto existe (estratégia)
 
-O hotsite **é** o portal de inscrição. Cada visitante que demonstra interesse é um
-**lead** que pode (ou não) concluir a inscrição e o pagamento da taxa. O objetivo da
-integração é **medir e nutrir todo o percurso** — não apenas "quem clicou em
-inscrever", mas **onde cada pessoa parou** e **qual origem traz matrícula**.
+O hotsite **é** o portal de admissão. Cada pessoa que demonstra interesse — agenda uma
+visita, faz login, cria conta, inicia uma inscrição — é um **contato** que pode (ou não)
+concluir a inscrição, pagar a taxa e, aprovado, efetivar a matrícula. A integração existe
+para **medir e nutrir todo o percurso**: não apenas "quem se inscreveu", mas **onde cada
+pessoa parou** e **qual origem traz matrícula**.
 
 Princípios (boas práticas de CRM/marketing aplicadas aqui):
 
-- **Um contato, muitos eventos.** A chave do contato é o **e-mail**; o RD deduplica e
-  monta a linha do tempo. Não pensamos em "1 lead = 1 envio", e sim em um contato que
-  **acumula eventos** ao longo do funil.
+- **Um contato, muitos eventos.** A chave do contato é o **e-mail**; o RD deduplica e monta
+  a linha do tempo. Não é "1 lead = 1 envio", e sim um contato que **acumula eventos** ao
+  longo do funil.
 - **Estágios de ciclo de vida.** Visitante → Lead → Lead Qualificado → Oportunidade →
-  Cliente. Cada etapa do processo seletivo **promove** o contato.
-- **Eventos server-side > pixel no browser.** Disparamos do BFF (Next.js): mais
-  confiável (sem adblock), e permite usar dados que o browser não deve ver (ex.: o
-  e-mail do responsável já cadastrado, lido do banco do RM).
+  Cliente. Cada marco do processo **promove** o contato.
+- **Eventos server-side > pixel no browser.** Quase todos os eventos são disparados pelo BFF
+  (Next.js): mais confiável (sem adblock) e permite usar dados que o browser não deve ver
+  (ex.: o e-mail do responsável já cadastrado, lido do banco do RM). Meta e Google Ads são a
+  exceção client-side (sob consentimento).
 - **Medir abandono, não só sucesso.** O valor está em saber onde as pessoas param.
-- **Atribuição.** UTMs/origem desde o primeiro toque respondem "qual campanha gera
+- **Atribuição desde o primeiro toque.** UTMs/origem respondem "qual campanha gera
   matrícula", não só clique.
-- **LGPD por design.** Consentimento explícito no formulário de interesse; o
-  responsável reconhecido já possui relação/base legal com a instituição.
+- **LGPD por design.** Token só no servidor; e-mail completo nunca vai ao cliente;
+  consentimento controla Meta/Google Ads.
 
 ---
 
-## 2. Os dois produtos do RD Station
+## 2. Os dois produtos do RD Station e como o sistema fala com eles
 
-| Produto | Para quê | API |
-| --- | --- | --- |
-| **RD Station Marketing** | Captura de lead, nutrição, funil de contato (ciclo de vida), automações | `api.rd.services/platform/*` |
-| **RD Station CRM** | Pipeline de negociação (deals) da equipe de admissão/matrícula | CRM v1/v2 (deals, stages, sources) |
+| Produto | Para quê | Endpoint usado hoje | Credencial |
+| --- | --- | --- | --- |
+| **RD Station Marketing** | Contatos + eventos de funil (ciclo de vida) | `POST https://api.rd.services/platform/conversions?api_key=…` | `RD_STATION_TOKEN` (API Key) |
+| **RD Station CRM** | Negociações (deals) do pipeline de admissão | `https://crm.rdstation.com/api/v1/…` (deals, contacts, deal_products) | `RD_CRM_TOKEN` (token de instância, por usuário) |
 
-Para o funil de inscrição, o **Marketing** é o núcleo. O **CRM** entra quando a equipe
-de admissão for trabalhar os leads num pipeline de vendas (Passo 3).
+Ambos são **complementares e já estão ativos**. O Marketing recebe o **contato e o evento**
+(dedup por e-mail); o CRM recebe a **negociação** (deal) para a equipe de admissão trabalhar
+o pipeline.
 
-### Autenticação (duas opções)
+### Filosofia comum das duas camadas (`lib/marketing/`)
 
-A própria documentação oficial separa os dois modos por finalidade:
+- **Sempre server-side** — o token nunca vai ao browser.
+- **Não-bloqueante** — qualquer falha do RD só gera log; **nunca** interrompe a inscrição,
+  a matrícula ou o agendamento.
+- **Modo stub** — sem o token configurado, a chamada vira apenas log (`[rdstation] (stub …)`
+  / `[rdcrm] (stub …)`), útil em dev.
 
-- **API Key (token público)** — endpoint *Conversão via API Key*:
-  `POST https://api.rd.services/platform/conversions?api_key=TOKEN`. Segundo a RD, serve
-  **exclusivamente para disparar eventos de conversão que criam/atualizam contatos** e é
-  a **opção recomendada para integrar formulários e sistemas internos** que transmitem
-  conversões. **É o que usamos hoje (Passo 1)** — exatamente o caso de uso indicado.
-- **OAuth 2.0** (`client_id`/`client_secret` → `code` → `access_token` +
-  `refresh_token`) — exigido para tudo **além** de conversão: disparar **Events**
-  (ciclo de vida e e-commerce), **marcar/desmarcar oportunidade** (ganha/perdida),
-  **atualizar contatos sem conversão**, consultar **Analytics** e configurar
-  **Webhooks**. Migração planejada para o Passo 2 (guardar o `refresh_token`
-  server-side e renovar o `access_token` automaticamente).
+### Autenticação — o que é usado e o que falta
 
-> **Boas práticas oficiais a observar:** todas as chamadas vão ao domínio base
-> `https://api.rd.services` sobre **TLS 1.3**; respeitar os **limites de requisição** da
-> API (retry com backoff em 429); a **chave do contato é o e-mail** (a RD deduplica e
-> atualiza o mesmo contato a cada conversão — "um contato, muitos eventos").
+- **API Key (Marketing)** — endpoint *Conversão via API Key*. É o modo recomendado pela RD
+  para transmitir conversões de sistemas internos. **É o que usamos.**
+- **Token de instância (CRM v1)** — querystring `?token=…`. Simples, servidor↔servidor. **É
+  o que usamos.**
+- **OAuth 2.0** — necessário para a **Events API** (eventos de e-commerce nativos:
+  *Checkout Iniciado*, *Pedido Pago*, *Carrinho Abandonado*), para o **CRM v2**, para
+  **Analytics** e para configurar **Webhooks**. **Ainda não implementado** (Passo 2).
+
+> **Boas práticas oficiais a observar:** domínio base `https://api.rd.services` sobre TLS;
+> respeitar limites de requisição — os eventos de Marketing já têm **retry com backoff**
+> em 429/5xx e erro de rede (`lib/marketing/retry.ts`); a chave do contato é o **e-mail**
+> (dedup automático — "um contato, muitos eventos").
 
 ---
 
@@ -90,695 +106,542 @@ flowchart LR
         U[Visitante / Responsável]
     end
     subgraph BFF[Next.js BFF — server-side]
-        A2["/api/auth/login<br/>(ativo: login-responsavel)"]
-        M["/api/marketing/inscricao-iniciada<br/>(ativo: inscricao-iniciada)"]
-        I["/api/inscricao<br/>(ativo: cadastro-novo-responsavel + boleto-gerado)"]
-        L["/api/lead<br/>(planejado: lead-captado)"]
-        F["lib/marketing/rdstation.ts<br/>registrarEventoFunil()"]
+        V["/api/visitas<br/>(visita-agendada + deal de visita)"]
+        A2["/api/auth/login<br/>(login-responsavel)"]
+        M["/api/marketing/inscricao-iniciada<br/>(inscricao-iniciada)"]
+        I["/api/inscricao<br/>(cadastro-novo-responsavel + boleto-gerado + deal)"]
+        MAT["/api/matricula<br/>(dispara conciliação da inscrição)"]
+        J["/api/jobs/conciliar-*<br/>(cron: pagamento / matrícula / visitas)"]
+        LIBM["lib/marketing/rdstation.ts<br/>registrarEventoFunil()"]
+        LIBC["lib/marketing/rdcrm.ts<br/>deals + conciliação"]
     end
     subgraph TOTVS
         DB[(CorporeRM<br/>SQL — leitura)]
         EDU[EduPS WebAPI<br/>escrita/auth]
     end
-    RD[(RD Station<br/>Marketing)]
+    PG[(Postgres 'agos'<br/>store de visitas)]
+    RDM[(RD Station<br/>Marketing)]
+    RDC[(RD Station<br/>CRM)]
 
+    U -->|agenda visita| V
     U -->|login| A2
     U -->|clica "incluir candidato"| M
     U -->|submissão da inscrição| I
-    U -.->|formulário de interesse| L
+    U -->|efetiva matrícula| MAT
+    V --> PG
     A2 -->|SELECT e-mail server-side| DB
-    M -->|e-mail pela sessão| DB
     I -->|EduPS NovaInscricao| EDU
-    A2 --> F
-    M --> F
-    I --> F
-    L -.-> F
-    F -->|"POST /platform/conversions (API Key)"| RD
+    V --> LIBM
+    A2 --> LIBM
+    M --> LIBM
+    I --> LIBM
+    I --> LIBC
+    J --> LIBM
+    J --> LIBC
+    LIBM -->|POST /platform/conversions| RDM
+    LIBC -->|/api/v1/deals| RDC
 ```
 
-**Regra de ouro:** o **token do RD nunca vai ao browser**. Todo evento é disparado pelo
-BFF. Marketing **nunca bloqueia** a inscrição: falhas só geram log.
+**Regra de ouro:** o **token do RD nunca vai ao browser**. Marketing/CRM **nunca bloqueiam**
+o fluxo do candidato — falhas só geram log.
 
 ---
 
-## 4. O funil mapeado em eventos RD
+## 4. O funil real, evento a evento (o que é enviado de fato)
+
+Esta é a tabela **auditada contra o código** — inclui os campos que cada evento envia ao RD
+Marketing. Todo evento envia sempre `cf_etapa_funil` e `cf_ano_processo`, além de
+`email` (obrigatório — sem e-mail o evento é ignorado), `name`/`mobile_phone` quando
+disponíveis, e a **atribuição de origem** (`client_tracking_id` + UTMs) quando há `req`.
+
+| Evento (`EtapaFunil`) | Dispara em | Ciclo de vida | Campos específicos enviados |
+| --- | --- | --- | --- |
+| `visita-agendada` | `POST /api/visitas` (visita marcada) | Lead (topo) | `segmento`; `cf_data_visita`, `cf_local_visita`. **Sem `idps`** (visita não tem PS) |
+| `visita-realizada` | Cron `conciliar-visitas` (comparecimento marcado na AGOS) | Lead Qualificado | `telefone`, `segmento`; `cf_data_visita`, `cf_local_visita`. **Sem UTM/`idps`** (cron, sem `req`) |
+| `login-responsavel` | `POST /api/auth/login` (responsável **já cadastrado**) | Lead | `idps`; `cf_responsavel_reconhecido="true"` |
+| `cadastro-novo-responsavel` | `POST /api/inscricao` (**novo** responsável, 1ª inscrição) | Lead | `telefone`, `idps` |
+| `inscricao-iniciada` | `POST /api/marketing/inscricao-iniciada` (beacon "incluir candidato") | Lead Qualificado | `idps`; `cf_responsavel_reconhecido="true"` |
+| `area-escolhida` | `POST /api/marketing/area-escolhida` (beacon ao escolher a série no wizard) | Lead Qualificado | `segmento`, `idps` |
+| `boleto-gerado` | `POST /api/inscricao` (taxa gerada / inscrição concluída) | Oportunidade | `telefone`, `segmento`, `idps`; **rico** — ver abaixo |
+| `pagamento-confirmado` | Cron `conciliar-pagamentos` (taxa paga no RM) | Cliente | `idps`; `cf_numero_inscricao`, `cf_nome_candidato`, `cf_data_pagamento_taxa`. **Sem UTM/telefone** (cron, sem `req`) |
+| `cadastro-matricula` | Cron `conciliar-matriculas` (reserva **gerada**) | Cliente | `idps`; `cf_numero_inscricao`, `cf_nome_candidato`, `cf_valor_reserva` |
+| `reserva-matricula-paga` | Cron `conciliar-matriculas` (reserva **paga**) | Cliente | `idps`; `cf_numero_inscricao`, `cf_nome_candidato`, `cf_valor_reserva`, `cf_data_pagamento_reserva` |
+
+**Campos ricos do `boleto-gerado`** (evento de maior valor): `cf_numero_inscricao`,
+`cf_valor_taxa`, `cf_nome_candidato`, `cf_processo_seletivo`, `cf_course_of_interest`
+(reaproveita o campo padrão da conta, com o mesmo nome do PS), `cf_relacao_responsavel`
+(pai/mãe/outro), `cf_responsavel_financeiro_distinto` (sim/nao) e — quando o responsável
+financeiro é outra pessoa — `cf_nome_responsavel_financeiro`,
+`cf_email_responsavel_financeiro`, `cf_telefone_responsavel_financeiro`.
+
+**Identificador de conversão:** `inscricao-<ano>-<etapa>` (ou `-<etapa>-<segmento>` quando
+há segmento). Ex.: `inscricao-2027-boleto-gerado-fundamental1`. O ano vem de
+`RD_ANO_PROCESSO` (padrão `2027`).
+
+### O que está declarado mas **não é emitido**
+
+O type `EtapaFunil` ainda declara **`lead-captado`**, que **não é disparado hoje**:
+dependeria de um formulário de interesse (LeadModal) e da rota `POST /api/lead`, que **não
+existem**. Ou seja, **não há captura de lead anônimo** hoje — todo contato só entra quando
+já tem e-mail (visita, login, cadastro ou inscrição).
+
+> **Atualização:** `area-escolhida` e `visita-realizada` (como eventos de Marketing) — antes
+> declarados mas não emitidos — **passaram a ser disparados**: `area-escolhida` via beacon do
+> wizard ao escolher a série; `visita-realizada` no cron de visitas, na transição para
+> *realizada* (§6.2/§8.3). Restam só `lead-captado` (topo anônimo).
 
 ```mermaid
 flowchart LR
-    A[Login / Cadastro] -->|login-responsavel OU cadastro-novo-responsavel → Lead| B[Painel do responsável]
-    B -->|inscricao-iniciada → Lead| C[Wizard: escolha de série/área]
-    C -->|area-escolhida| D[Boleto gerado]
-    D -->|boleto-gerado → Checkout Iniciado / Oportunidade| E[Pagamento]
-    E -->|pagamento-confirmado → Order Paid / Won| F[Inscrito]
-    C -.->|abandono| G[Abandoned Cart]
-    D -.->|não pagou| G
+    V[visita-agendada] -->|Lead| L[login-responsavel]
+    L -->|Lead| C[cadastro-novo-responsavel]
+    C -->|Lead Qualif.| INI[inscricao-iniciada]
+    INI -->|Lead Qualif.| AE[area-escolhida]
+    AE -->|Oportunidade| B[boleto-gerado]
+    B -->|Cliente| P[pagamento-confirmado]
+    P --> CM[cadastro-matricula]
+    CM --> RM[reserva-matricula-paga]
+    INI -.->|abandono medido por segmento| AE
+    B -.->|gerou e não pagou = recuperável| P
 ```
 
-| Etapa interna (`EtapaFunil`) | Momento no fluxo | Onde dispara hoje | Ciclo de vida RD |
-| --- | --- | --- | --- |
-| `lead-captado` | Formulário de interesse (LeadModal — Fase 1) | *(planejado — `/api/lead` e o modal ainda não existem)* | Lead |
-| `login-responsavel` | Responsável JÁ CADASTRADO autentica (1x por sessão) | ✅ `POST /api/auth/login` | Lead |
-| `cadastro-novo-responsavel` | NOVO responsável cria conta (1ª inscrição) | ✅ `POST /api/inscricao` (fluxo novo) | Lead |
-| `inscricao-iniciada` | Clica em "incluir candidato" (inicia o wizard) | ✅ `POST /api/marketing/inscricao-iniciada` (beacon, sessão) | Lead Qualificado |
-| `area-escolhida` | Série/área selecionada | *(planejado — wizard)* | Lead Qualificado |
-| `boleto-gerado` | Taxa de inscrição gerada (inscrição concluída) | ✅ `POST /api/inscricao` ¹ | Oportunidade |
-| `pagamento-confirmado` | Pagamento da taxa confirmado | *(webhook/retorno — Passo 2)* | Cliente |
-
-¹ Só dispara quando a submissão efetivamente grava no RM — hoje sujeita ao guard
-`INSCRICAO_SOMENTE_LEITURA` (enquanto `true`, a rota responde 503 e nenhum evento sai).
-
-Cada evento envia campos de contexto (custom fields): `cf_etapa_funil`,
-`cf_ano_processo`, `cf_segmento_interesse`, `cf_idps` e extras por etapa. O
-`boleto-gerado`, por ser o evento de maior valor, envia ainda: `cf_numero_inscricao`,
-`cf_valor_taxa`, `cf_nome_candidato`, `cf_processo_seletivo`, `cf_relacao_responsavel`,
-`cf_responsavel_financeiro_distinto` e — quando o responsável financeiro é outra pessoa —
-`cf_nome_responsavel_financeiro`, `cf_email_responsavel_financeiro` e
-`cf_telefone_responsavel_financeiro`.
-
 ---
 
-## 5. Plano técnico em 3 passos
+## 5. RD Station CRM — negociações (deals) em detalhe
 
-### Passo 1 — Eventos de funil via API Key 🟡 **(parcial)**
+O CRM está **ativo**. A cada `boleto-gerado`, o BFF cria uma **negociação** de forma
+não-bloqueante (`registrarNegociacaoInscricao`, chamada em `app/api/inscricao`).
 
-- Biblioteca `plataforma/lib/marketing/rdstation.ts` com `registrarEventoFunil()`:
-  server-only, não-bloqueante, dedup por e-mail no RD, custom fields `cf_*`. ✅
-- `POST /api/auth/login` dispara `login-responsavel` quando um responsável JÁ
-  CADASTRADO autentica com sucesso (e-mail real lido do RM, server-side; 1x por sessão,
-  pois cada login cria uma sessão nova). ✅
-- `POST /api/inscricao` (fluxo novo) dispara `cadastro-novo-responsavel` após criar a
-  conta do responsável na 1ª inscrição — diferencia, no RD, quem se cadastra pela 1ª vez
-  de quem retorna. ✅
-- `POST /api/marketing/inscricao-iniciada` (beacon do painel) dispara `inscricao-iniciada`
-  quando o responsável clica em "incluir candidato". O e-mail vem da SESSÃO (nunca do
-  cliente); best-effort e não-bloqueante. ✅
-- `POST /api/inscricao` dispara `boleto-gerado` após a inscrição ser gravada no RM
-  (com contexto enriquecido: `cf_numero_inscricao`, `cf_valor_taxa`, `cf_nome_candidato`,
-  `cf_processo_seletivo`, `cf_relacao_responsavel` e dados do responsável financeiro).
-  ✅ *(sujeito ao guard `INSCRICAO_SOMENTE_LEITURA`).*
-- Variável `RD_ANO_PROCESSO` (padrão `2027`) compõe o `conversion_identifier`. ✅
-- **Falta:** criar `POST /api/lead` + o modal de interesse para o evento `lead-captado`
-  (rate-limit por IP + consentimento LGPD), o evento intermediário `area-escolhida` do
-  wizard e o rastreio de **abandono**. 🔜
+### 5.1 A negociação da inscrição
 
-### Passo 2 — OAuth + Events/Contacts/Funnels + Webhooks 🔜 **(planejado)**
+`POST https://crm.rdstation.com/api/v1/deals?token=…` com:
 
-- Migrar a autenticação de API Key para **OAuth 2.0** (guardar `refresh_token`
-  server-side; rotina de renovação).
-- Usar **Events** (`POST /platform/events`) para eventos de ciclo de vida e e-commerce
-  (*Checkout Iniciado*, *Order Paid*, *Abandoned Cart*).
-- Usar **Contacts API** para custom fields ricos e mover o contato no **funil de
-  contato** (lifecycle).
-- Configurar **webhooks** (MKT/CRM) para o RD nos avisar quando um contato vira
-  oportunidade/cliente, cruzando de volta com o nosso banco.
-
-### Passo 3 — RD Station CRM (pipeline de matrícula) � **(ativo, parcial)**
-
-- Espelha a oportunidade de inscrição como **deal** no CRM (`registrarNegociacaoInscricao()`),
-  disparado no `boleto-gerado`: contatos (responsável + responsável financeiro), valor da
-  taxa como produto, `deal_source` e campos personalizados (curso/série/relação/IDLAN). ✅
-- **Falta:** mover o deal para "pago/ganho" quando a taxa é baixada (reconciliação via
-  `RD_CRM_CF_IDLAN_ID`) e configurar automações de recuperação ("gerou boleto e não
-  pagou" → lembrete). 🔜
-
----
-
-## 6. Métricas que enriquecem a análise do percurso
-
-Com a evolução (Passos 2/3) passa a ser possível medir:
-
-- **Tempo entre etapas** (CPF → boleto; boleto → pagamento) → gargalos.
-- **Taxa de abandono por etapa** (via *Abandoned Cart* / ausência do próximo evento).
-- **Reconhecido vs. novo** — conversão de quem já é da base (irmãos/ex-alunos) vs. lead
-  frio.
-- **Segmento/série com melhor conversão** (1º ano vs. demais séries).
-- **Origem/UTM → matrícula** (atribuição real) via *Analytics → estatísticas de funil*.
-- **Valor** (taxa de inscrição) nos eventos de e-commerce → receita potencial vs.
-  realizada.
-- **Multi-candidato** — quantos responsáveis inscrevem mais de um filho
-  (`cf_qtd_candidatos`), insight específico do modelo de irmãos do CSA.
-- **Cohort por dia/semana** — picos vs. prazo do edital.
-
----
-
-## 7. O que configurar na plataforma RD Station (passo a passo)
-
-> Necessário para o **Passo 1** já começar a registrar eventos. Itens marcados como
-> *(Passo 2/3)* só são preciso quando avançarmos.
-
-### 7.1 Obter o token público (API Key) — **obrigatório agora**
-
-1. Entre no **RD Station Marketing** com um usuário **administrador**.
-2. Menu do usuário → **Integrações** (ou **Configurações da conta → Integrações**).
-3. Procure por **Token público / API Key** (seção de "Integrações via API" /
-   "Conversões"). Copie o **token público**.
-4. Cole no `.env.local` do servidor (NUNCA versionar):
-
-   ```bash
-   RD_STATION_TOKEN=seu_token_publico_aqui
-   RD_ANO_PROCESSO=2027
-   ```
-
-5. Em produção, defina a mesma variável no ambiente da VM/serviço Next.js.
-
-> Sem o token, o sistema funciona normalmente: os eventos viram apenas **log**
-> (`[rdstation] (stub …)`), sem enviar nada ao RD. Útil para dev.
-
-### 7.2 Criar os campos personalizados (custom fields) — **recomendado agora**
-
-No RD Station, em **Configurações → Campos personalizados**, crie (tipo texto, exceto
-onde indicado):
-
-| Campo (API) | Rótulo sugerido | Uso |
-| --- | --- | --- |
-| `cf_etapa_funil` | Etapa do funil | Etapa atual no percurso |
-| `cf_ano_processo` | Ano do processo | Ex.: 2027 |
-| `cf_segmento_interesse` | Segmento de interesse | Ex.: fundamental1 |
-| `cf_idps` | IDPS (RM) | Id do processo seletivo |
-| `cf_responsavel_reconhecido` | Responsável reconhecido | "true" quando já é da base |
-| `cf_consentimento_lgpd` | Consentimento LGPD | "true" no formulário de interesse |
-| `cf_numero_inscricao` | Nº da inscrição | Enviado no `boleto-gerado` |
-| `cf_valor_taxa` | Valor da taxa | Valor da taxa de inscrição |
-| `cf_nome_candidato` | Nome do candidato | Candidato inscrito |
-| `cf_processo_seletivo` | Processo seletivo | Nome do PS (curso/ano-série) |
-| `cf_relacao_responsavel` | Relação do responsável | pai / mãe / outro |
-| `cf_responsavel_financeiro_distinto` | Resp. financeiro distinto | "sim"/"nao" |
-| `cf_nome_responsavel_financeiro` | Nome do resp. financeiro | Quando é outra pessoa |
-| `cf_email_responsavel_financeiro` | E-mail do resp. financeiro | Quando é outra pessoa |
-| `cf_telefone_responsavel_financeiro` | Telefone do resp. financeiro | Quando é outra pessoa |
-
-> **Auto-criação — a diferença entre os dois produtos:**
-> - **Marketing:** os campos `cf_*` são **criados automaticamente** pela API ao receber a
->   conversão (não usam ID). Pré-criar é **opcional** e serve só para qualidade: sem isso,
->   o **rótulo** nasce igual ao identificador técnico (`cf_valor_taxa`) e o **tipo** nasce
->   sempre como **texto** (para tratar `cf_valor_taxa`/`cf_age` como número/moeda em
->   relatórios, crie/ajuste o tipo antes).
-> - **CRM:** é diferente — os campos personalizados **NÃO são auto-criados**. A API v1
->   exige um **UUID pré-cadastrado**; sem ele, o campo é **silenciosamente ignorado**
->   (ver §7.6). Portanto os campos do CRM **precisam ser criados manualmente**.
-
-**Reaproveitar campos que já existem na conta.** A conta do CSA já possui campos padrão;
-sempre que fizer sentido, **mapeamos nossos dados para eles** em vez de criar duplicatas:
-
-| Campo existente (API) | Como usar | Origem no nosso fluxo |
-| --- | --- | --- |
-| `cf_course_of_interest` | Curso/série de interesse | Nome do PS (`cf_processo_seletivo`) — **enviado no `boleto-gerado`** |
-| `cf_interest_in_courses` | Interesse em cursos (lista) | Idem, quando houver múltiplos candidatos |
-| `cf_schooling` | Escolaridade | *(não temos hoje — só se um formulário coletar)* |
-| `cf_age` | Idade do candidato | *(não temos hoje — poderia derivar da data de nascimento)* |
-| `cf_educational_motivation` / `cf_professional_training` | Motivação / formação | *(não temos hoje — campos de formulário de interesse futuro)* |
-
-> **NÃO escrever nos campos `cf_plug_*`** (`cf_plug_funnel_stage`, `cf_plug_deal_pipeline`,
-> `cf_plug_lost_reason`, `cf_plug_contact_owner`, `cf_plug_opportunity_origin`,
-> `cf_plug_opportunity_score`, `cf_plug_opportunity_value`). Eles são **preenchidos
-> automaticamente pela sincronização nativa CRM → Marketing** ("Plug"): refletem a
-> etapa/funil/valor/origem/qualificação da negociação **no CRM**. Escrever neles por API
-> causaria conflito com o que o próprio RD sincroniza. Ou seja, ao criarmos o deal no CRM
-> (§7.6), esses campos do contato **passam a ser alimentados sozinhos** — é justamente o
-> que queremos.
-
-> O RD cria campos automaticamente ao receber a conversão, mas criá-los antes garante
-> rótulos legíveis e tipos corretos para segmentação/relatórios.
-
-### 7.3 Conferir as conversões chegando
-
-1. Faça uma inscrição/teste no portal (ou preencha o formulário de interesse).
-2. No RD, vá em **Conversões** (ou no contato gerado) e confira o
-   `conversion_identifier` no padrão `inscricao-2027-<etapa>[-<segmento>]`.
-3. Verifique se os custom fields apareceram no contato.
-
-### 7.4 Organizar o funil e automações — **operação contínua**
-
-- **Funil de contato (lifecycle):** em **Configurações → Funil de marketing**, associe
-  os identificadores de conversão aos estágios (Lead, Lead Qualificado, Oportunidade,
-  Cliente) conforme a tabela da seção 4.
-- **Segmentações:** crie listas por `cf_segmento_interesse`, `cf_etapa_funil`,
-  `cf_responsavel_reconhecido` para campanhas dirigidas.
-- **Automação de recuperação:** fluxo para quem chegou a `boleto-gerado` mas não a
-  `pagamento-confirmado` (lembrete da taxa).
-
-### 7.5 *(Passo 2)* Aplicação OAuth e Webhooks
-
-- Em **Integrações → Apps / OAuth**, crie uma aplicação para obter
-  `client_id`/`client_secret` e configurar `redirect_uri`. Guarde o `refresh_token`
-  server-side.
-- Configure **Webhooks** para os eventos de marcação de oportunidade/cliente apontando
-  para um endpoint do nosso BFF (a criar).
-
-### 7.6 *(Passo 3)* RD Station CRM — token e negociações (deals)
-
-> **Sim, o CRM precisa de um token próprio** — **diferente** do token do Marketing
-> (`RD_STATION_TOKEN`). São dois produtos e duas credenciais.
-
-**O CRM tem duas APIs:**
-
-| API | Base | Autenticação | Quando usar |
-| --- | --- | --- | --- |
-| **v1** (recomendada para começar) | `https://crm.rdstation.com/api/v1/` | **Token de instância** via querystring `?token=...` | Integração simples servidor↔servidor (igual à API Key do Marketing) |
-| **v2** | `https://api.rd.services/crm/v2/` | **OAuth 2.0** (app + `access_token`/`refresh_token`) | Quando precisar de OAuth/escopos e endpoints mais novos |
-
-**Como obter o token de instância (v1):**
-
-> O token do CRM **não fica** em "Configurações → Integrações". No RD Station CRM
-> ele é o **Token da instância**, **por usuário** (cada usuário tem um token único
-> e imutável), e fica no **Perfil** do usuário.
-
-1. Entre no **RD Station CRM** (use um usuário com **visibilidade Geral**, para
-   conseguir criar/listar negociações de toda a equipe).
-2. Clique no seu **nome de usuário** (canto superior direito da página).
-3. No menu suspenso, clique em **Perfil**
-   (atalho direto: `https://plugcrm.net/app#/settings/profile`).
-4. Se já existir, o código aparece no campo **Token da instância** — é só copiar.
-   Se não existir, clique em **Gerar Token** e copie o código.
-5. Cole no `.env.local` do servidor (NUNCA versionar):
-
-   ```bash
-   RD_CRM_TOKEN=seu_token_da_instancia_aqui
-   # Opcional: etapa inicial do funil de admissão (ID em CRM → Funis de venda).
-   # Sem ela, a negociação cai no funil padrão.
-   RD_CRM_DEAL_STAGE_ID=id_da_etapa_inicial
-   ```
-
-6. Em produção, defina as mesmas variáveis no ambiente da VM/serviço Next.js.
-
-> **Quem pode gerar token:** em **nome do usuário → Configurações → Preferências →
-> aba Token de API**, um administrador define se apenas administradores ou todos
-> os usuários podem gerar tokens. **Atenção:** *Desativar/Gerar token* novamente
-> invalida (irreversivelmente) as integrações que usavam o token anterior.
-
-> Sem `RD_CRM_TOKEN`, o sistema funciona normalmente: a negociação vira apenas
-> **log** (`[rdcrm] (stub …)`), sem enviar nada ao CRM. Útil para dev.
-
-**Mapeamento nos campos padrão da NEGOCIAÇÃO (decisão atual).** Para evitar campos
-personalizados (que na API v1 exigem UUID pré-cadastrado), usamos apenas os **campos
-padrão** do deal. O mapeamento é:
-
-| Dado do portal | Campo padrão do CRM | Observação |
-| --- | --- | --- |
-| Nº da inscrição + candidato | **Nome do negócio** | `Inscrição nº <n> — <candidato> [LAN:<idlan>]`; o **IDLAN** (token `[LAN:<idlan>]`) é a chave de reconciliação (o nº da inscrição se repete entre PS/séries) |
-| Origem (Social/Orgânico/Pago) | **Fonte** (`deal_source`) | auto-criada pelo nome; ver §7.8 |
-| Processo seletivo + série | **Campanha** (`campaign`) | texto livre, ex.: `Fund. I 2027 — 1º ano` |
-| Valor da taxa | **Valor único** (`amount_unique`) | preenchido pela taxa lançada como **produto** (recorrência única) |
-| Funil de admissão | **Funil** (`pipeline`) | `RD_CRM_DEAL_STAGE_ID` define a etapa inicial |
-| Etapa | **Etapa do funil** (`deal_stage`) | Inscrito → Taxa paga → Documentação → Prova → Matriculado |
-| Prazo do PS (opcional) | **Previsão de fechamento** (`prediction_date`) | data limite da inscrição |
-| Temperatura (opcional) | **Qualificação** (`rating`) | ex.: elevar após boleto gerado |
-
-**O que continua fora de campo (vai nos contatos):**
-
-- **Relação do responsável** (pai/mãe/outro): sufixo no nome do contato — `Fulano (pai)`.
-- **Responsável financeiro distinto** e seu **nome**: entra como **2º contato** do deal
+- **Nome:** `Inscrição nº <n> — <candidato> [LAN:<idlan>]`.
+- **Chave de reconciliação `[LAN:<idlan>]`:** o `NUMEROINSCRICAO` **se repete** entre
+  PS/séries, então a chave estável é o **IDLAN** do título financeiro da taxa, embutido no
+  nome. É por ele que o job de conciliação localiza o deal (sem depender de busca por nome).
+- **Etapa inicial:** `deal_stage_id = RD_CRM_DEAL_STAGE_ID` (etapa "Inscrito").
+- **Valor:** a taxa entra como **produto** (`deal_products` → "Taxa de inscrição"). Na API
+  v1, o total do deal é **calculado a partir dos produtos** — enviar `amount_total` direto
+  seria ignorado.
+- **Contatos:** o responsável pela inscrição (nome com a relação — `Fulano (responsável —
+  mãe)`) e, quando há **responsável financeiro distinto**, ele entra como **2º contato**
   (`… (responsável financeiro)`).
+- **Fonte (`deal_source.name`):** `RD_SOURCE_PADRAO` (padrão `"Portal de Inscrição"`).
+- **Campos personalizados (`deal_custom_fields`):** ver 5.2.
 
-> **Reconciliação de pagamento por IDLAN (sem custom field):** o `NUMEROINSCRICAO`
-> **não é único** (repete entre PS/séries), então a chave de reconciliação é o **IDLAN**
-> do título financeiro, embutido no **nome do negócio** como token `[LAN:<idlan>]`. O job
-> de conciliação (FLAN pago no RM) lista as negociações do funil, indexa por IDLAN
-> (parseando o token) e move o deal casado para a etapa "Taxa paga". O `IDLAN` é único,
-> eliminando a ambiguidade da busca por nome.
+### 5.2 Campos personalizados do CRM — correção importante
 
-**O que o sistema já faz:** ao gerar a taxa de inscrição (`boleto-gerado`), o BFF
-cria de forma **não-bloqueante** uma **negociação** (`POST /api/v1/deals?token=...`):
+> **Atenção — mudança em relação à versão anterior deste documento.** A versão anterior
+> dizia que o CRM usava **apenas campos padrão** do deal (Campanha, Valor único, Previsão
+> de fechamento, Qualificação) para *evitar* campos personalizados. **Isso não é mais
+> verdade.** Hoje o código usa **campos personalizados via UUID** (`custom_field_id`) e
+> **não** envia `campaign`, `amount_unique`, `prediction_date` nem `rating`.
 
-- **Nome:** `Inscrição nº <n> — <candidato>`.
-- **Contatos:** o responsável pela inscrição (nome com a relação, e-mail, telefone) e,
-  quando há **responsável financeiro distinto**, ele entra como **2º contato**
-  (`… (responsável financeiro)`) — visível no CRM sem depender de campo personalizado.
-- **Valor:** a taxa é registrada como **produto** (`deal_products` → "Taxa de inscrição").
-  Na API v1 o `amount_total` do deal é **calculado a partir dos produtos** — enviar
-  `amount_total` direto no deal seria ignorado.
-- **Fonte (`deal_source`):** ver §7.8 (mapeamento de origem).
-- **Campanha (`campaign`):** processo seletivo + série (texto livre).
-- **Etapa/funil:** `RD_CRM_DEAL_STAGE_ID` (etapa inicial), depois movida na conciliação.
+Na API v1 do CRM, campo personalizado **exige um UUID pré-cadastrado** (CRM →
+Configurações → Campos personalizados de **negociação**). Cada campo só é enviado quando o
+respectivo UUID está no ambiente; sem o UUID, o campo é **silenciosamente ignorado** (não
+quebra). Campos personalizados **da negociação** usados hoje:
 
-A operação de leitura/escrita no RM nunca é afetada por falhas do CRM.
+| Campo (conteúdo) | Env (UUID) | Quando |
+| --- | --- | --- |
+| Relação do responsável (pai/mãe/outro) | `RD_CRM_CF_RELACAO_ID` | criação da inscrição |
+| Resp. financeiro distinto (sim/nao) | `RD_CRM_CF_RESP_FIN_DISTINTO_ID` | criação da inscrição |
+| Nome do resp. financeiro | `RD_CRM_CF_NOME_RESP_FIN_ID` | quando distinto |
+| Processo seletivo (nome do PS) | `RD_CRM_CF_PROCESSO_ID` | criação da inscrição |
+| Série/segmento | `RD_CRM_CF_SERIE_ID` | criação (reusado também na visita) |
+| IDLAN da taxa (reconciliação) | `RD_CRM_CF_IDLAN_ID` | criação da inscrição |
+| Pai (nome · CPF · e-mail · tel) | `RD_CRM_CF_PAI_ID` | conciliação de matrícula |
+| Mãe | `RD_CRM_CF_MAE_ID` | conciliação de matrícula |
+| Responsável financeiro | `RD_CRM_CF_RESP_FINANCEIRO_ID` | conciliação de matrícula |
+| Data do cadastro de matrícula | `RD_CRM_CF_DATA_CADASTRO_ID` | conciliação de matrícula |
+| Data do pagamento da reserva | `RD_CRM_CF_DATA_PAGAMENTO_ID` | conciliação de matrícula |
+| (Visita) data/tipo/situação/operador/participantes/local/origem | `RD_CRM_CF_VISITA_*` | deal de visita |
 
-**Configuração recomendada no CRM (operação):** defina **pipeline** e **stages**
-de admissão (ex.: *Inscrito → Documentação → Prova/Entrevista → Matriculado*),
-**sources** (origens) e **lost reasons** (motivos de perda). Use o
-`RD_CRM_DEAL_STAGE_ID` para que toda inscrição entre já na etapa inicial certa.
+> **Por que a matrícula grava contatos em campos personalizados?** Limite da API v1: **não
+> é possível adicionar/atualizar contatos de um deal já existente** (`POST
+> /deals/{id}/contacts` → 404; `PUT` ignora `contacts`). Contatos só entram na **criação**.
+> Por isso pai/mãe/responsável financeiro da matrícula viram **campos de texto** no deal.
 
-### 7.7 Atribuição de origem (Social, Orgânico, Pago…) — **código de rastreamento**
+### 5.3 Sincronização nativa CRM → Marketing (campos `cf_plug_*`)
 
-Para detectar com confiança **de onde** o visitante chegou (incluindo redes
-sociais), a forma estável é deixar o **RD classificar** a origem:
+**NÃO escrever** nos campos `cf_plug_*` do contato (`cf_plug_funnel_stage`,
+`cf_plug_deal_pipeline`, `cf_plug_opportunity_value`, etc.). Eles são **preenchidos
+automaticamente** pela sincronização nativa "Plug" (CRM → Marketing) e refletem
+etapa/funil/valor/origem da negociação. Ao criarmos o deal, esses campos do contato passam
+a ser alimentados sozinhos — que é o que queremos.
 
-1. **Código de rastreamento na página.** Em **RD Station Marketing →
-   Configurações → Conta → Script do RD Station**, copie o *loader* da conta
-   (formato `…/loader-scripts/<UUID>-loader.js`) e informe só o **UUID** no
-   ambiente:
+---
 
-   ```bash
-   NEXT_PUBLIC_RD_TRACKING_UUID=uuid-da-sua-conta
-   ```
+## 6. Agendador de visitas → RD (topo de funil real)
 
-   O `layout.tsx` injeta o script automaticamente quando a variável existe. Ele
-   grava o cookie `__trf.src` com a atribuição de **primeiro e último toque**.
+O agendador de visitas tem **store próprio em Postgres** (schema `agos`, compartilhado com a
+AGOS — `VISITAS_DATABASE_URL`); **não toca o TOTVS**. Ele alimenta o RD por dois caminhos:
 
-2. **Ponte servidor↔navegador.** No BFF, os eventos de funil (`inscricao-iniciada`,
-   `boleto-gerado`) leem o cookie `__trf.src` e o enviam como
-   **`client_tracking_id`** na conversão. Assim o RD amarra o evento server-side
-   à sessão do navegador e aplica a origem correta — **sem reimplementarmos** a
-   classificação. UTMs (`utm_source/medium/campaign`) são enviados como reforço
-   opcional quando presentes.
+### 6.1 Síncrono, no agendamento → Marketing + Meta
 
-> Sem `NEXT_PUBLIC_RD_TRACKING_UUID`, nada é carregado no browser e os eventos
-> seguem funcionando (apenas sem o `client_tracking_id`/atribuição fina).
+`POST /api/visitas` grava a reserva e chama `dispararEventosVisita`:
 
-### 7.8 Fonte padrão (`source`) — fallback consistente entre Marketing e CRM
+- **RD Marketing:** evento `visita-agendada` (contato + `cf_data_visita`, `cf_local_visita`,
+  segmento, atribuição). Dispara **independentemente** de consentimento de marketing (é
+  server-side; base legal de interesse legítimo/relacionamento).
+- **Meta CAPI:** evento `Schedule` **apenas com consentimento** de marketing (deduplicado
+  por `event_id`).
 
-O código de rastreamento (§7.7) cobre a origem **real** (Social, Orgânico, Pago…).
-Quando ela **não existe** (visitante sem cookie `__trf.src` e sem UTM), evitamos que o
-RD registre a origem como `unknown` aplicando uma **fonte padrão** — a mesma nos dois
-produtos, para o `source` ficar consistente:
+### 6.2 Assíncrono, por cron → CRM (deal de visita)
 
-- **Marketing** (`rdstation.ts`): a fonte padrão vira `traffic_source` da conversão,
-  **apenas como fallback** (nunca sobrepõe o `client_tracking_id`/UTM reais).
-- **CRM** (`rdcrm.ts`): a mesma string vira o `deal_source.name` da negociação (o CRM
-  cria a *source* automaticamente pelo nome, se ainda não existir).
+`POST /api/jobs/conciliar-visitas` (protegido por `x-cron-secret`) chama
+`sincronizarVisitasCrm`, que lê o Postgres e mantém um **deal de visita** no funil:
 
-Controle por ambiente (opcional — o padrão embutido é `"Portal de Inscrição"`):
+- **Nome:** `<título> — <nome> [VIS:<agendamento_id>]`. O título distingue a origem —
+  `Visita (Portal)`, `Visita (Secretaria)` ou o nome do tipo interno (ex.: *Atendimento ao
+  cliente*). Idempotência pelo token `[VIS:<id>]`.
+- **Etapa:** `RD_CRM_DEAL_STAGE_VISITA_AGENDADA_ID`; se já compareceu, entra/avança para
+  `RD_CRM_DEAL_STAGE_VISITA_REALIZADA_ID` (**forward-only**).
+- **Marketing na transição:** ao criar o deal já em *realizada* ou avançar *agendada →
+  realizada*, também dispara o evento de Marketing **`visita-realizada`** (contato +
+  `cf_data_visita`/`cf_local_visita`). A idempotência é a própria transição de etapa do CRM
+  (ocorre 1×), então o evento não se repete nas execuções seguintes do cron.
+- **Campos personalizados** (`RD_CRM_CF_VISITA_*`): data/hora, tipo, situação, operador,
+  participantes (`Pai: João; Candidato: Pedro (1º ano)`), local, origem, série.
+- **Fonte (`deal_source`):** `Portal — Agendamento de visita` / `Secretaria — Agendamento
+  de visita` / nome do tipo interno.
+- **Escopo:** só visitas desde `VISITAS_RD_SYNC_DESDE` (padrão `2026-01-01`), não canceladas
+  e **com e-mail** (sem e-mail não há contato útil).
+
+### 6.3 "Deal único" — juntar visita e inscrição num só deal
+
+Atrás da flag `VISITAS_DEAL_UNICO=true`, ao criar a negociação da inscrição o sistema
+procura (por e-mail) um **deal de visita** dessa pessoa que ainda não virou inscrição
+(`buscarDealVisitaPorEmail`: tem `[VIS:]`, não tem `[LAN:]`, está em etapa de visita). Se
+achar, **reaproveita esse deal** em vez de criar um segundo: renomeia (juntando o nome da
+inscrição + `[LAN:]`), move para "Inscrito", grava os campos e produtos da inscrição. Assim
+a jornada **visita → inscrição vira um único deal** no pipeline. Se algo falhar, cai no
+fluxo normal de criação (não perde a inscrição).
+
+---
+
+## 7. Rastreamento de origem e atribuição
+
+### 7.1 Código de rastreamento (loader do RD)
+
+Em `RD → Configurações → Conta → Script do RD Station`, o *loader* grava o cookie
+`__trf.src` com a atribuição de **1º e último toque**. Informe o UUID no ambiente:
 
 ```bash
-# Fonte/"source" padrão exibida no RD quando não há origem real (Marketing + CRM).
-RD_SOURCE_PADRAO=Portal de Inscrição
+NEXT_PUBLIC_RD_TRACKING_UUID=uuid-da-sua-conta
 ```
 
-> Mapa resumido do `source`: origem real (cookie/UTM) **tem prioridade**; na ausência
-> dela, usa-se `RD_SOURCE_PADRAO` → `traffic_source` (Marketing) e `deal_source.name`
-> (CRM). Assim relatórios de origem não ficam poluídos com "unknown".
+O `layout.tsx` injeta o script **sob consentimento de marketing** (via `TrackingConsent`).
+Sem a env, nada carrega e os eventos seguem (só sem `client_tracking_id`).
+
+### 7.2 Ponte servidor↔navegador
+
+No BFF, `extrairOrigem(req)` lê o cookie `__trf.src` e o envia como **`client_tracking_id`**
+na conversão — o RD amarra o evento server-side à sessão do navegador e aplica a origem
+correta (inclusive Social), **sem reimplementarmos** a classificação. UTMs
+(`utm_source/medium/campaign`) são reforço opcional. Também captura **click IDs do Google
+Ads** (`gclid`/`wbraid`/`gbraid`) para uso em importação de conversões offline (estratégia).
+
+> Os eventos disparados por **cron** (pagamento/matrícula) **não têm `req`** e, portanto,
+> **não enviam atribuição** — o que é aceitável porque a origem já foi fixada no primeiro
+> toque do mesmo contato (dedup por e-mail).
+
+### 7.3 Fonte padrão (`source`) — fallback consistente
+
+Quando não há origem real (sem cookie e sem UTM), aplica-se uma **fonte padrão** para o RD
+não registrar `unknown`. A mesma string é usada nos dois produtos: `traffic_source` no
+Marketing e `deal_source.name` no CRM. Controle por `RD_SOURCE_PADRAO` (padrão `"Portal de
+Inscrição"`).
 
 ---
 
-## 8. Referência de implementação (arquivos)
+## 8. Conciliações automáticas (o coração da automação)
+
+Três jobs idempotentes e não-bloqueantes, todos protegidos por `x-cron-secret: $CRON_SECRET`
+(comparação em tempo constante; sem o segredo a rota fica 503/401). Rodam na VM
+`csa-portal01` via cron do sistema.
+
+### 8.1 Conciliação da **taxa de inscrição** (`/api/jobs/conciliar-pagamentos`)
+
+Cron **08h e 18h**. Detecta no RM as inscrições cuja taxa está **paga** (`FLAN.STATUSLAN=1`),
+indexa os deals por **IDLAN** (via `listarNegociacoesDoFunil`), move o deal casado para
+`RD_CRM_DEAL_STAGE_PAGO_ID` (*Taxa paga*) e — só então — dispara `pagamento-confirmado` no
+Marketing. **Forward-only**: só avança quem está em *Inscrito*; nunca reprocessa.
+Resposta: `{ ok, verificadas, movidas, jaAvancadas, semDeal, falhas }`. Modo `?dry=1`
+simula sem efeitos.
+
+### 8.2 Conciliação da **pré-matrícula** (`/api/jobs/conciliar-matriculas`)
+
+Cron **de hora em hora** (`15 * * * *`) + **gatilho quase real-time**: ao efetivar a
+matrícula, `POST /api/matricula` dispara a conciliação **só daquela inscrição**
+(best-effort). Usa o **IDLAN da taxa** para achar o deal e, conforme o boleto de **reserva
+de matrícula (R$2.200)**:
+
+- reserva **gerada** (`STATUSLAN=0`) → *Cadastro de matrícula* (evento `cadastro-matricula`);
+- reserva **paga** (`STATUSLAN=1`) → *Pré-matrícula* (evento `reserva-matricula-paga`).
+
+Em ambas: ajusta o **valor** do deal para a reserva (troca o produto "Taxa de inscrição"
+pelo "Reserva de matrícula" R$2.200) e grava os **campos personalizados** de enriquecimento
+(pai/mãe/resp. financeiro + datas). A etapa *Matriculado* é sinalizada **manualmente**.
+
+> O 1º ano do Fundamental não passa por *Prova/Entrevista*. Como a automação é dirigida por
+> **pagamento**, esse "pulo" acontece sozinho (o deal nunca entra em Prova/Entrevista).
+
+### 8.3 Conciliação de **visitas** (`/api/jobs/conciliar-visitas`)
+
+Cron que espelha o Postgres de visitas no CRM (§6.2): cria deals de visita novos, faz
+backfill dos campos e avança *Visita agendada → Visita realizada* quando a secretaria marca
+comparecimento (na **AGOS**, via janela de "chamada"). Nessa transição também dispara o
+evento de Marketing `visita-realizada` (habilita a automação pós-visita — §10.2.3). A
+"chamada" na AGOS é apenas um `UPDATE` de status no banco compartilhado; **todo o
+espelhamento RD (CRM + Marketing) acontece aqui, no hotsite**, a partir desse banco.
+
+### 8.4 Disparo local (on-demand, do Mac)
+
+`scripts/conciliar-pagamentos-local.mjs` e `scripts/conciliar-matriculas-local.mjs` leem o
+RM de produção (via `.env.local`) e aplicam no RD (DRY por padrão; `--commit` efetiva).
+Úteis durante o processo em curso, sem esperar o cron.
+
+---
+
+## 9. Integração com Google Ads (correlata)
+
+Não é RD, mas faz parte do mesmo ecossistema de mensuração. `rastrearConversaoInscricao`
+(`lib/marketing/google-ads.ts`) dispara a conversão **"Inscrição Concluída"** via `gtag`
+(client-side), quando a inscrição conclui com sucesso (`WizardInscricao.tsx`). Só funciona
+**sob consentimento de marketing** (o `gtag` só é carregado nesse caso, via
+`TrackingConsent`). Envs: `NEXT_PUBLIC_GOOGLE_ADS_ID`, `NEXT_PUBLIC_GADS_CONVERSAO_INSCRICAO`.
+A captura de `gclid`/`wbraid`/`gbraid` (§7.2) prepara o terreno para **importação de
+conversões offline** (matrícula) — ver [estrategia-marketing-google-rd-station.md](estrategia-marketing-google-rd-station.md).
+
+---
+
+## 10. Análise de boas práticas (marketing + CRM) e sugestões
+
+> Esta seção avalia o processo atual contra boas práticas de gestão de marketing/CRM e
+> propõe refinamentos. É o material central para a conversa com o parceiro.
+
+### 10.1 O que já está de acordo com boas práticas ✅
+
+- **Contato único, orientado a eventos** (dedup por e-mail) — base correta para lifecycle.
+- **Eventos server-side** — resiliente a adblock; dados sensíveis não vazam ao browser.
+- **Marketing + CRM integrados** com sincronização nativa (`cf_plug_*`).
+- **Atribuição de 1º/último toque** via loader do RD + repasse `client_tracking_id`.
+- **Consentimento** governando Meta/Google Ads; token só no servidor (LGPD por design).
+- **Automação de estágio dirigida por fato financeiro real** (RM), idempotente e
+  forward-only — a "verdade" do funil vem do ERP, não de cliques.
+- **Jornada consolidada** (deal único visita→inscrição) — evita deals duplicados, um
+  problema clássico de higiene de pipeline.
+
+### 10.2 Lacunas e riscos (com recomendação)
+
+1. **Não há topo de funil anônimo.** Sem `lead-captado`/`/api/lead`, só capturamos quem já
+   tem e-mail (visita/login/cadastro). **Recomendação:** implementar o formulário de
+   interesse (LeadModal + `/api/lead`, com rate-limit e consentimento) **ou** usar
+   **formulários/landing pages nativos do RD** operados pelo parceiro — captando lead frio
+   para nutrição antes da inscrição. *(Prioridade alta — é a maior lacuna de captação.)*
+
+2. **Abandono intra-wizard.** ✅ **Implementado.** `area-escolhida` agora dispara (beacon do
+   wizard ao escolher a série), permitindo medir onde o wizard perde gente **por segmento** e
+   nutrir "quase-inscritos". *(Ação restante — parceiro: montar a segmentação/automação sobre
+   `inscricao-2027-area-escolhida-<segmento>` sem `boleto-gerado`.)*
+
+3. **Comparecimento à visita no Marketing.** ✅ **Implementado.** `visita-realizada` agora é
+   emitido também no Marketing (no cron de visitas, na transição p/ *realizada* — §6.2/§8.3),
+   habilitando automação pós-visita. *(Ação restante — parceiro: criar o fluxo "compareceu →
+   agradecimento + convite a se inscrever" sobre `inscricao-2027-visita-realizada`.)*
+
+4. **Automação de recuperação de boleto ainda não configurada no RD.** Já **temos o dado**
+   (`boleto-gerado` sem `pagamento-confirmado`). **Recomendação:** o parceiro cria o fluxo
+   de nutrição "gerou taxa e não pagou em N dias → lembrete" — ganho rápido, sem código
+   novo. **Receita pronta para o parceiro em §12.4.** *(Prioridade alta — receita direta.)*
+
+5. **Retry/backoff em 429/5xx.** ✅ **Implementado** para os eventos de Marketing
+   (`lib/marketing/retry.ts`: retentativa com backoff exponencial + jitter em 429/5xx e erro
+   de rede, respeitando `Retry-After`; não-bloqueante). O CRM segue coberto pelos crons
+   idempotentes de conciliação. *(Sem fila/Redis — retentativa in-process no servidor
+   standalone.)*
+
+6. **Passo 2 (OAuth + Events API) pendente.** Sem ele, não usamos os eventos de e-commerce
+   nativos do RD (*Checkout Iniciado / Pedido Pago / Carrinho Abandonado*), que destravam
+   relatórios de receita e o "carrinho abandonado" oficial; nem **Webhooks** (retorno do
+   RD) nem **Analytics de funil**. **Recomendação:** planejar o Passo 2 quando o parceiro
+   quiser relatórios de receita/atribuição mais finos. *(Prioridade média.)*
+
+7. **Governança de dados a alinhar com o parceiro:** vocabulário de estágios
+   (Oportunidade × Cliente × Inscrito × Matriculado), padronização de **sources** e de
+   **UTMs** de campanha, **motivos de perda** (lost reasons) no CRM, e **tipos/rótulos** dos
+   campos personalizados (ex.: `cf_valor_taxa`/`cf_valor_reserva` como **número/moeda** para
+   relatórios). *(Prioridade alta — sem isso os relatórios saem sujos.)*
+
+8. **LGPD — evento de visita sem consentimento.** O evento de Marketing da visita é enviado
+   independentemente do opt-in (Meta respeita o consentimento; o RD não). É defensável
+   (relacionamento/execução), mas **é uma decisão a registrar** com o parceiro/DPO e a
+   refletir na política de privacidade. *(Prioridade média — conformidade.)*
+
+9. **Higiene técnica:** `buscarNegociacaoPorNumeroInscricao` é código morto (a
+   reconciliação usa IDLAN); e o `NEXT_PUBLIC_GOOGLE_ADS_ID` tem um **ID padrão embutido**
+   no layout — confirmar que o valor de produção vem da env. *(Prioridade baixa.)*
+
+### 10.3 Priorização sugerida (para decidir na reunião)
+
+| Prioridade | Item | Quem faz | Status |
+| --- | --- | --- | --- |
+| 🔴 Alta | Automação de recuperação de boleto (§10.2.4 / receita §12.4) | Parceiro (RD) | ⏳ Pendente (parceiro) |
+| 🔴 Alta | Governança: sources, UTMs, tipos de campo, lost reasons (§10.2.7) | Parceiro + escola | ⏳ Pendente |
+| 🔴 Alta | Topo de funil anônimo — `/api/lead` **ou** LP nativa do RD (§10.2.1) | Dev **ou** Parceiro | ⏳ Pendente |
+| 🟡 Média | Abandono por segmento — `area-escolhida` (§10.2.2) | Dev ✅ + Parceiro (segmentação) | ✅ Código feito |
+| 🟡 Média | `visita-realizada` no Marketing + nutrição pós-visita (§10.2.3) | Dev ✅ + Parceiro (automação) | ✅ Código feito |
+| 🟡 Média | Retry/backoff nos eventos de Marketing (§10.2.5) | Dev | ✅ Feito |
+| 🟡 Média | Passo 2 — OAuth + Events API + Webhooks (§10.2.6) | Dev | ⏳ Pendente |
+| 🟢 Baixa | Higiene técnica (§10.2.9) | Dev | ⏳ Pendente |
+
+---
+
+## 11. Referência de implementação (arquivos)
 
 | Arquivo | Papel |
 | --- | --- |
-| `plataforma/lib/marketing/rdstation.ts` | Lib server-only; `registrarEventoFunil()`, tipo `EtapaFunil`, custom fields, `client_tracking_id`/`traffic_*` |
-| `plataforma/lib/marketing/origem.ts` | `extrairOrigem(req)` — lê cookie `__trf.src` + UTMs para atribuição |
-| `plataforma/lib/marketing/rdcrm.ts` | Lib server-only; `registrarNegociacaoInscricao()` — cria deal no CRM (v1) |
-| `plataforma/app/layout.tsx` | Injeta o código de rastreamento do RD (env `NEXT_PUBLIC_RD_TRACKING_UUID`) |
-| `plataforma/app/api/auth/login/route.ts` | BFF — evento `login-responsavel` no login de responsável já cadastrado |
-| `plataforma/app/api/auth/reconhecer/route.ts` | BFF — reconhecimento por CPF (gate de login; **não** dispara evento) |
-| `plataforma/app/api/marketing/inscricao-iniciada/route.ts` | BFF — beacon do evento `inscricao-iniciada` (clique em "incluir candidato"; e-mail pela sessão) |
-| `plataforma/app/api/inscricao/route.ts` | BFF — eventos `cadastro-novo-responsavel` (fluxo novo) + `boleto-gerado` + negociação no CRM após gravar a inscrição |
-| `plataforma/lib/totvs/queries.ts` | `reconhecerResponsavelPorCpf()` expõe `email` bruto **server-side** (nunca ao cliente) |
-| `plataforma/.env.local` | `RD_STATION_TOKEN`, `RD_ANO_PROCESSO`, `RD_SOURCE_PADRAO`, `RD_CRM_TOKEN`, `RD_CRM_DEAL_STAGE_ID`, `RD_CRM_CF_*` (PROCESSO/SERIE/RELACAO/RESP_FIN_DISTINTO/NOME_RESP_FIN/IDLAN), `NEXT_PUBLIC_RD_TRACKING_UUID` |
-| `plataforma/app/api/lead/route.ts` | *(a criar)* BFF público — evento `lead-captado` (formulário de interesse), rate-limit + LGPD |
+| `lib/marketing/rdstation.ts` | `registrarEventoFunil()`, type `EtapaFunil`, custom fields `cf_*`, atribuição |
+| `lib/marketing/retry.ts` | `fetchComRetentativa()` — retry com backoff em 429/5xx (usado no Marketing) |
+| `lib/marketing/rdcrm.ts` | Deals: `registrarNegociacaoInscricao`, `criarNegociacaoVisita`, `mover…`, `ajustarValorReservaDeal`, `atualizar…`, `buscarDealVisitaPorEmail`, `listarNegociacoesDoFunil`; tokens `[LAN:]`/`[VIS:]` |
+| `lib/marketing/origem.ts` | `extrairOrigem(req)` — cookie `__trf.src` + UTMs + gclid/wbraid/gbraid |
+| `lib/marketing/conciliar-matriculas.ts` | Núcleo da conciliação de pré-matrícula (cron + commit) |
+| `lib/marketing/google-ads.ts` | `rastrearConversaoInscricao` — conversão client-side (gtag) |
+| `lib/agenda/marketing.ts` | `dispararEventosVisita` — RD Marketing + Meta CAPI da visita |
+| `lib/agenda/crm-sync.ts` | `sincronizarVisitasCrm` — deals de visita no CRM |
+| `lib/agenda/db.ts` / `schema.sql` | Store Postgres das visitas (schema `agos`) |
+| `app/layout.tsx` | Injeta loader do RD (`NEXT_PUBLIC_RD_TRACKING_UUID`) e gtag, sob consentimento |
+| `app/api/auth/login/route.ts` | `login-responsavel` |
+| `app/api/inscricao/route.ts` | `cadastro-novo-responsavel` + `boleto-gerado` + criação do deal |
+| `app/api/marketing/inscricao-iniciada/route.ts` | beacon `inscricao-iniciada` (e-mail pela sessão) |
+| `app/api/marketing/area-escolhida/route.ts` | beacon `area-escolhida` (série no corpo, e-mail pela sessão) |
+| `app/api/matricula/route.ts` | dispara a conciliação da inscrição (best-effort) |
+| `app/api/visitas/route.ts` | agendamento → `visita-agendada` + Meta |
+| `app/api/jobs/conciliar-pagamentos/route.ts` | cron — taxa paga → *Taxa paga* + `pagamento-confirmado` |
+| `app/api/jobs/conciliar-matriculas/route.ts` | cron — reserva → *Cadastro/Pré-matrícula* |
+| `app/api/jobs/conciliar-visitas/route.ts` | cron — sincroniza deals de visita |
+| *(a criar)* `app/api/lead/route.ts` | evento `lead-captado` (formulário de interesse) — **não existe** |
 
-### Contrato de `registrarEventoFunil`
+### Variáveis de ambiente (todas em `.env.local` / `/etc/csa-portal/.env`)
 
-```ts
-registrarEventoFunil({
-  etapa: "inscricao-iniciada", // EtapaFunil
-  email: "responsavel@exemplo.com", // chave do contato no RD
-  nome?: "Maria",
-  telefone?: "+5521999999999",
-  segmento?: "fundamental1",
-  idps?: 210,
-  camposExtras?: { cf_qualquer_campo: "valor" }, // recebe prefixo cf_ se faltar
-});
-// Nunca lança. Sem RD_STATION_TOKEN → apenas log (stub). Sem e-mail → ignora.
-```
-
----
-
-## 9. Plano de operação — funil (Marketing) e pipeline (CRM)
-
-Visão consolidada do que configurar/operar depois que os tokens estiverem no ar.
-
-### 9.1 Funil de contato (Marketing / lifecycle)
-
-Associe os `conversion_identifier` (`inscricao-<ano>-<etapa>`) aos estágios em
-**Configurações → Funil de marketing**:
-
-| Estágio (lifecycle) | Alimentado por | Ação de nutrição sugerida |
-| --- | --- | --- |
-| **Lead** | `lead-captado`, `login-responsavel`, `cadastro-novo-responsavel` | e-mail de boas-vindas / lembrete de concluir a inscrição |
-| **Lead Qualificado** | `inscricao-iniciada`, `area-escolhida` | conteúdo da série escolhida; prazo do edital |
-| **Oportunidade** | `boleto-gerado` | lembrete da taxa (recuperação de checkout) |
-| **Cliente** | `pagamento-confirmado` | onboarding / próximos passos da matrícula |
-
-- **Segmentações úteis:** por `cf_course_of_interest`, `cf_etapa_funil`, `cf_idps`,
-  `cf_responsavel_reconhecido` (reconhecido × lead frio).
-- **Automação de recuperação:** quem atingiu `boleto-gerado` mas não `pagamento-confirmado`
-  em N dias → fluxo de lembrete (o `pagamento-confirmado` passa a chegar pelo job da §11).
-
-### 9.2 Pipeline de admissão (CRM)
-
-Em **CRM → Funis de venda**, crie o funil e as etapas; pegue os IDs (GET
-`/deal_stages`) e use `RD_CRM_DEAL_STAGE_ID` (entrada) e `RD_CRM_DEAL_STAGE_PAGO_ID`
-(destino ao pagar — §11):
-
-| Etapa (sugestão) | Entra quando | Como muda |
-| --- | --- | --- |
-| **Inscrito (taxa pendente)** | deal criado no `boleto-gerado` | `RD_CRM_DEAL_STAGE_ID` |
-| **Taxa paga** | pagamento confirmado (FLAN) | job da §11 → `RD_CRM_DEAL_STAGE_PAGO_ID` |
-| **Documentação / Prova-Entrevista / Matriculado** | operação manual da equipe | — |
-
-- **Sources (origens):** o deal já envia `deal_source.name` (§7.8). O CRM cria a fonte
-  pelo nome, se não existir.
-- **Lost reasons (motivos de perda):** cadastre (ex.: "Desistiu", "Matriculou em outra
-  escola", "Não pagou a taxa") para a equipe fechar deals perdidos com motivo.
-- **Reflexo no Marketing:** ao mexer no deal, o RD alimenta sozinho os `cf_plug_*` do
-  contato (§7.2) — sem código nosso.
+**Marketing:** `RD_STATION_TOKEN`, `RD_ANO_PROCESSO`, `RD_SOURCE_PADRAO`,
+`NEXT_PUBLIC_RD_TRACKING_UUID`.
+**CRM (base):** `RD_CRM_TOKEN`, `RD_CRM_DEAL_PIPELINE_ID`, `RD_CRM_DEAL_STAGE_ID`,
+`RD_CRM_DEAL_STAGE_PAGO_ID`, `RD_CRM_DEAL_STAGE_CADASTRO_MATRICULA_ID`,
+`RD_CRM_DEAL_STAGE_PRE_MATRICULA_ID`, `RD_CRM_DEAL_STAGE_MATRICULADO_ID`,
+`RD_CRM_PRODUCT_RESERVA_ID`.
+**CRM (campos personalizados):** `RD_CRM_CF_RELACAO_ID`, `RD_CRM_CF_RESP_FIN_DISTINTO_ID`,
+`RD_CRM_CF_NOME_RESP_FIN_ID`, `RD_CRM_CF_PROCESSO_ID`, `RD_CRM_CF_SERIE_ID`,
+`RD_CRM_CF_IDLAN_ID`, `RD_CRM_CF_PAI_ID`, `RD_CRM_CF_MAE_ID`, `RD_CRM_CF_RESP_FINANCEIRO_ID`,
+`RD_CRM_CF_DATA_CADASTRO_ID`, `RD_CRM_CF_DATA_PAGAMENTO_ID`, `RD_CRM_CF_VISITA_DATA_ID`,
+`RD_CRM_CF_VISITA_TIPO_ID`, `RD_CRM_CF_VISITA_SITUACAO_ID`, `RD_CRM_CF_VISITA_OPERADOR_ID`,
+`RD_CRM_CF_VISITA_PARTICIPANTES_ID`, `RD_CRM_CF_VISITA_LOCAL_ID`, `RD_CRM_CF_VISITA_ORIGEM_ID`.
+**CRM (visitas — etapas):** `RD_CRM_DEAL_STAGE_VISITA_AGENDADA_ID`,
+`RD_CRM_DEAL_STAGE_VISITA_REALIZADA_ID`.
+**Visitas (store):** `VISITAS_DATABASE_URL`, `VISITAS_DB_SCHEMA`, `VISITAS_DB_SSL`,
+`VISITAS_RD_SYNC_DESDE`, `VISITAS_DEAL_UNICO`.
+**Google Ads:** `NEXT_PUBLIC_GOOGLE_ADS_ID`, `NEXT_PUBLIC_GADS_CONVERSAO_INSCRICAO`.
+**Jobs:** `CRON_SECRET`.
 
 ---
 
-## 10. Backfill dos cadastros já existentes (~20)
+## 12. O que configurar na plataforma RD Station (checklist)
 
-**Objetivo:** trazer para o RD (Marketing + CRM) as inscrições que já ocorreram antes de
-ativarmos a integração.
+### 12.1 Marketing — obrigatório
 
-**Limitação importante (confirmada na doc da API):** o endpoint de *Conversão via API
-Key* aceita apenas `conversion_identifier`, `email` e campos do contato — **não há campo
-de data**. A conversão é **datada no recebimento**. Logo, **não é possível "recriar" os
-eventos com a data original** por esse caminho (nem a importação por CSV do Marketing
-define data de evento). O mesmo vale para a data de criação do deal no CRM.
+1. **Token público (API Key):** RD Marketing (admin) → Integrações → Token público →
+   `RD_STATION_TOKEN`.
+2. **Loader de rastreamento:** Configurações → Conta → Script do RD Station → UUID →
+   `NEXT_PUBLIC_RD_TRACKING_UUID`.
+3. **Campos personalizados (Marketing):** são auto-criados ao receber a conversão (tipo
+   nasce como **texto**). Pré-criar melhora rótulo/tipo — em especial deixar `cf_valor_taxa`
+   / `cf_valor_reserva` como **número/moeda**. Campos usados: `cf_etapa_funil`,
+   `cf_ano_processo`, `cf_segmento_interesse`, `cf_idps`, `cf_responsavel_reconhecido`,
+   `cf_numero_inscricao`, `cf_valor_taxa`, `cf_nome_candidato`, `cf_processo_seletivo`,
+   `cf_course_of_interest`, `cf_relacao_responsavel`, `cf_responsavel_financeiro_distinto`,
+   `cf_nome/email/telefone_responsavel_financeiro`, `cf_data_visita`, `cf_local_visita`,
+   `cf_valor_reserva`, `cf_data_pagamento_taxa`, `cf_data_pagamento_reserva`.
+4. **Funil de contato (lifecycle):** associar os `conversion_identifier`
+   (`inscricao-2027-<etapa>`) aos estágios Lead → Cliente (tabela §4).
 
-**Estratégia recomendada (idempotente, executada UMA vez):**
+### 12.2 CRM — obrigatório (já em produção)
 
-1. Um script lê as inscrições existentes direto do **RM (SQL)** — responsável, e-mail,
-   candidato, processo, valor da taxa, `IDLAN`, e a **data original da inscrição**.
-2. Para cada uma, faz **upsert idempotente**:
-   - **Marketing:** dispara `boleto-gerado` (dedup por e-mail — não duplica contato).
-   - **CRM:** cria o deal (mesma `registrarNegociacaoInscricao`).
-3. **Preserva a data original** onde a API deixa: em **campo personalizado**
-   (`cf_data_inscricao_original` no contato e um custom field/anotação no deal). Assim a
-   informação histórica não se perde, mesmo com o evento datado "hoje".
-4. **Idempotência:** rodar de novo não duplica contatos (chave = e-mail). Para o CRM,
-   antes de criar, **buscar o deal** (por `IDLAN`/nome) e pular se já existir.
+5. **Token de instância:** RD CRM → nome do usuário → **Perfil** → Token da instância →
+   `RD_CRM_TOKEN` (use um usuário com **visibilidade Geral**).
+6. **Funil e etapas de admissão** (funil "Admissão 2027"): *Sem contato → Visita agendada →
+   Visita realizada → Inscrito → Taxa paga → Prova/Entrevista → Cadastro de matrícula →
+   Pré-matrícula → Matriculado*. Pegar os IDs (`GET /deal_stages`) e preencher os
+   `RD_CRM_DEAL_STAGE_*`.
+7. **Campos personalizados de negociação** (§5.2): criar cada um e colar o **UUID** na env
+   correspondente (`RD_CRM_CF_*`).
+8. **Produto "Reserva de matrícula"** (R$2.200) → `RD_CRM_PRODUCT_RESERVA_ID`.
+9. **Sources** (deixar o código criar pelo nome) e **Lost reasons** (cadastrar: "Desistiu",
+   "Matriculou em outra escola", "Não pagou a taxa"…).
 
-> Aceitável para ~20 registros: os contatos ficam corretos e segmentáveis; só a
-> **linha do tempo** do evento marca a data do backfill (documentada no `cf_`).
+### 12.3 Operação contínua (parceiro)
 
-**Arquivo a criar:** `plataforma/scripts/backfill-rd.mjs` (leitura no RM + escrita no RD;
-`--dry-run` por padrão; confirmação explícita para efetivar).
+10. **Segmentações** por série, etapa, "reconhecido × novo".
+11. **Automações de nutrição:** boas-vindas, **lembrete de boleto** (receita §12.4),
+    pós-visita (§10.2.3), reengajamento de abandono do wizard (§10.2.2).
+12. **Relatórios** de origem → matrícula e de tempo entre etapas.
 
----
+### 12.4 Receita — automação de recuperação de boleto (parceiro, sem código)
 
-## 11. Job de conciliação de pagamento (cron 2×/dia) — IMPLEMENTADO
+> **Objetivo:** lembrar quem **gerou a taxa de inscrição e não pagou**. O dado já existe no
+> RD — nenhuma mudança de código é necessária, só a automação abaixo no RD Marketing.
 
-**Objetivo:** sem intervenção manual, detectar quando a **taxa foi paga** e refletir no
-RD: mover o deal para *Taxa paga* e disparar o evento `pagamento-confirmado` no Marketing.
+**O dado que já chega ao RD:**
+- quem **gerou** a taxa → conversão `inscricao-2027-boleto-gerado` (com variantes por série,
+  ex.: `inscricao-2027-boleto-gerado-fundamental1`);
+- quem **pagou** → conversão `inscricao-2027-pagamento-confirmado`;
+- reforço: o contato carrega `cf_etapa_funil` e (no `boleto-gerado`) `cf_numero_inscricao`,
+  `cf_valor_taxa`, `cf_nome_candidato`, `cf_processo_seletivo`.
 
-**Como funciona (implementação atual):**
+**Público-alvo (segmentação):**
+- **converteu** em `inscricao-2027-boleto-gerado` (qualquer série)
+- **E não** converteu em `inscricao-2027-pagamento-confirmado`.
 
-1. **Detecção (RM/SQL):** [listarInscricoesPagasParaConciliar](../plataforma/lib/totvs/queries.ts)
-   seleciona as inscrições do ciclo (filtro por ano no nome do PS) cuja taxa está **paga** —
-   `FLAN.STATUSLAN = 1` (com `DATABAIXA`) — e traz o **IDLAN** do título (chave única) e o
-   contato do responsável pela inscrição (`SPSUSUARIOTIPORELAC` TIPORELAC=5) para o evento
-   de Marketing.
-2. **Localizar o deal no CRM (por IDLAN — opção B, sem tabela de controle):**
-   [listarNegociacoesDoFunil](../plataforma/lib/marketing/rdcrm.ts) lista as negociações do
-   funil (paginado, `RD_CRM_DEAL_PIPELINE_ID`) e o job as indexa por **IDLAN**, extraído do
-   token `[LAN:<idlan>]` no nome (`extrairIdLanDoNome`). O IDLAN é **único** (o
-   `NUMEROINSCRICAO` se repete entre PS/séries), então não há ambiguidade. Não precisa do
-   `deal_id` guardado nem de custom field.
-3. **Atualizar:** [moverNegociacaoParaEtapa](../plataforma/lib/marketing/rdcrm.ts) faz
-   *Update deal* (PUT) → move para `RD_CRM_DEAL_STAGE_PAGO_ID`; em seguida, Marketing →
-   conversão `pagamento-confirmado` (dedup por e-mail), só após mover o deal.
-4. **Idempotência (checagem de estágio):** só **avança** quem está em *Inscrito*
-   (`RD_CRM_DEAL_STAGE_ID`); pula quem já está em *Taxa paga* ou etapa posterior. Assim o
-   evento de Marketing é disparado no máximo 1× por inscrição. Nunca regride nem reprocessa.
-5. **Não-bloqueante e logado**, como as demais integrações.
+**Fluxo de automação sugerido (RD Marketing → Automação):**
+1. **Entrada:** converteu em `inscricao-2027-boleto-gerado`.
+2. **Espera:** aguardar **N dias** (sugestão: **2 a 3 dias**).
+3. **Condição:** o contato **converteu** em `inscricao-2027-pagamento-confirmado`?
+   - **Sim →** encerrar (já pagou; não incomodar).
+   - **Não →** enviar **e-mail 1** — "sua taxa de inscrição está aguardando pagamento"
+     (com nome do candidato/processo via campos personalizados; incluir instruções/2ª via).
+4. **(Opcional) 2º toque:** esperar mais **N dias**, reavaliar a mesma condição e, se ainda
+   não pago, enviar **e-mail 2** (última chamada) e/ou notificar a secretaria.
 
-**Execução (2×/dia):** rota protegida [POST /api/jobs/conciliar-pagamentos](../plataforma/app/api/jobs/conciliar-pagamentos/route.ts),
-protegida por header `x-cron-secret: $CRON_SECRET` (comparação em tempo constante; sem
-`CRON_SECRET` a rota fica desabilitada → 503). Cron na VM:
-
-```bash
-curl -fsS -X POST -H "x-cron-secret: $CRON_SECRET" \
-  http://127.0.0.1:3000/api/jobs/conciliar-pagamentos
-```
-
-Resposta JSON: `{ ok, verificadas, movidas, jaAvancadas, semDeal, falhas }`.
-
-**Env necessárias:** `RD_CRM_TOKEN`, `RD_CRM_DEAL_STAGE_PAGO_ID` (etapa destino),
-`RD_CRM_DEAL_STAGE_ID` (etapa *Inscrito*, referência de idempotência) e `CRON_SECRET`.
-
-**Modo simulação (`?dry=1`):** faz a detecção e a busca dos deals mas **não** move no CRM
-nem dispara Marketing; retorna também `moveriam: number[]` (números que seriam avançados).
-Útil para validar em produção sem efeitos colaterais.
-
-### 11.1 Implantação em produção (feito em 2026-07-06)
-
-A execução roda na **VM Linux `csa-portal01`** (não é Windows) via **cron do sistema**:
-
-- **Arquivo:** `/etc/cron.d/csa-conciliar` — agenda **08h e 18h** (`0 8,18 * * *`, usuário
-  `root`). O cron lê o `CRON_SECRET` do `.env` em tempo de execução (não embute o segredo)
-  e faz o `curl` para a rota local; saída em **`/var/log/csa-conciliar.log`**.
-
-  ```cron
-  0 8,18 * * * root SECRET="$(sed -n 's/^CRON_SECRET=//p' /etc/csa-portal/.env | head -1)"; \
-    curl -fsS -X POST -H "x-cron-secret: $SECRET" \
-    http://127.0.0.1:3000/api/jobs/conciliar-pagamentos >> /var/log/csa-conciliar.log 2>&1
-  ```
-
-- **`/etc/csa-portal/.env` (produção)** recebeu `RD_CRM_DEAL_STAGE_ID`,
-  `RD_CRM_DEAL_STAGE_PAGO_ID` e `CRON_SECRET` (segredo gerado **na própria VM** com
-  `openssl rand -hex 24` — nunca trafegou fora dela). `RD_CRM_TOKEN` já existia.
-- **Etapas (funil "Admissão 2027", id `6a4bb56342e296001faf851f`):** Inscrito
-  `6a4bb5634eabe9001d666600` (`RD_CRM_DEAL_STAGE_ID`) → Taxa paga
-  `6a4bb564aa4cb20022b93a3c` (`RD_CRM_DEAL_STAGE_PAGO_ID`).
-- **Provisionamento** feito por script idempotente (`scp` → `bash` na VM), que ajusta o
-  `.env`, gera o `CRON_SECRET` se ausente, reinicia o serviço e instala o cron.
-- **Teste em produção (2026-07-06):** 1ª execução real `movidas=31/31, falhas=0`; 2ª
-  execução `movidas=0, jaAvancadas=31` (idempotência); requisição sem `x-cron-secret` → `401`.
-
-> Os scripts de diagnóstico/adhoc (`plataforma/scripts/rdcrm-*.mjs`) rodam com
-> `node --env-file=.env.local` e usam apenas `RD_CRM_TOKEN` (somente leitura, salvo quando
-> explicitamente executam escrita confirmada).
-
-### 11.2 Disparo LOCAL da conciliação da inscrição (on-demand)
-
-Além do cron, dá para disparar a conciliação da **inscrição** do Mac, sem esperar o
-agendamento — útil enquanto o processo de inscrição está em curso:
-
-```bash
-cd plataforma
-node --env-file=.env.local scripts/conciliar-pagamentos-local.mjs            # prévia (dry-run)
-node --env-file=.env.local scripts/conciliar-pagamentos-local.mjs --commit   # aplica no RD
-```
-
-Lê o RM de produção (via `.env.local`) e, para cada inscrição com a **taxa (R$200) paga**
-(`FLAN.STATUSLAN=1`), move o deal **Inscrito → Taxa paga** (forward-only), garante o
-**valor R$200** (produto "Taxa de inscrição") e dispara o evento de Marketing
-`pagamento-confirmado`. É o par do `conciliar-matriculas-local.mjs` (§12.3), só que para a
-etapa de inscrição.
+**Cuidados importantes:**
+- **Defasagem do `pagamento-confirmado`:** ele é conciliado por **cron 08h/18h** (§8.1), não
+  em tempo real. Por isso use **N ≥ 1 dia** entre gerar e lembrar — janelas curtas (horas)
+  gerariam **falso-lembrete** para quem já pagou mas ainda não foi conciliado.
+- **Saída imediata ao pagar:** garanta que a automação **encerre** o contato assim que
+  `pagamento-confirmado` chegar (condição de saída), para não enviar lembrete depois do
+  pagamento.
+- **Frequência:** no máximo 2 lembretes; respeitar opt-out e horários de envio.
 
 ---
 
-## 12. Funil de PRÉ-MATRÍCULA — Cadastro de matrícula + Pré-matrícula (IMPLEMENTADO)
+## 13. Backfill dos cadastros já existentes
 
-Depois de "Taxa paga", o funil **Admissão 2027** ganhou duas etapas novas para
-acompanhar a matrícula do candidato aprovado, dirigidas pelo **boleto de reserva
-de matrícula (R$2.200)**:
-
-```
-Sem contato → Inscrito → Taxa paga → Prova/Entrevista →
-  Cadastro de matrícula → Pré-matrícula → Matriculado
-```
-
-- **Cadastro de matrícula** (`RD_CRM_DEAL_STAGE_CADASTRO_MATRICULA_ID`): a matrícula
-  foi efetivada e o **boleto de reserva foi GERADO** (cadastro preenchido e válido).
-  No RM: `SPSINSCRICAOAREAOFERTADA.RAMAT` preenchido e o título FLAN da reserva com
-  `STATUSLAN=0`.
-- **Pré-matrícula** (`RD_CRM_DEAL_STAGE_PRE_MATRICULA_ID`): o **boleto de reserva foi
-  PAGO** (`FLAN.STATUSLAN=1`). Pré-matrícula confirmada.
-- **Matriculado** (`RD_CRM_DEAL_STAGE_MATRICULADO_ID`): contrato assinado — **sinalizado
-  manualmente** (sem automação).
-
-> O 1º ano do Fundamental não passa por *Prova/Entrevista*. Como a automação é dirigida
-> por **pagamento**, esse "pulo" acontece sozinho (o deal nunca entra em Prova/Entrevista).
-
-### 12.1 Reconciliação (como o deal anda)
-
-A chave de reconciliação continua sendo o **IDLAN da TAXA** de inscrição, embutido no
-nome do deal como `[LAN:<idlan>]`. A localização da reserva no RM é
-`SPSINSCRICAOAREAOFERTADA.RAMAT → SPARCELA → SLAN → FLAN` (título de menor vencimento =
-a entrada/reserva de R$2.200). O job:
-
-1. move o deal para *Cadastro de matrícula* (reserva gerada) ou *Pré-matrícula* (paga),
-   **forward-only** (nunca regride);
-2. ajusta o **valor** da negociação para **R$2.200** (produto "Reserva de matrícula"),
-   removendo a taxa de R$200 — que já não é relevante nessas fases;
-3. grava os **campos personalizados** de enriquecimento (§12.2).
-
-Eventos de Marketing novos: `cadastro-matricula` e `reserva-matricula-paga`.
-
-### 12.2 Enriquecimento por CAMPOS PERSONALIZADOS (contatos + datas)
-
-⚠️ **Limite da API v1 do CRM:** não é possível adicionar/atualizar **contatos** de um deal
-que já existe (`POST /deals/{id}/contacts` → 404; `PUT /deals/{id}` **ignora** `contacts`).
-Contatos só entram na **criação** do deal. Por isso os dados de pai/mãe/responsável
-financeiro são gravados em **campos personalizados** (que o `PUT /deals/{id}` **atualiza**
-via `deal_custom_fields`). Cinco campos (criados por `scripts/rdcrm-cria-campos-matricula.mjs`):
-
-| Campo | Origem no RM | Env (UUID) |
-|---|---|---|
-| **Pai** | `SPSUSUARIOTIPORELAC` TIPORELAC=1 + `SPSUSUARIO` | `RD_CRM_CF_PAI_ID` |
-| **Mãe** | TIPORELAC=2 | `RD_CRM_CF_MAE_ID` |
-| **Responsável financeiro** | TIPORELAC=3 | `RD_CRM_CF_RESP_FINANCEIRO_ID` |
-| **Data do cadastro de matrícula** | `SALUNO.RECCREATEDON` (efetivação) | `RD_CRM_CF_DATA_CADASTRO_ID` |
-| **Data do pagamento da reserva** | `FLAN.DATABAIXA` | `RD_CRM_CF_DATA_PAGAMENTO_ID` |
-
-Cada contato vira texto `Nome · CPF <cpf> · <email> · <telefone>`; as datas em `dd/mm/aaaa`
-(com hora no cadastro). As **datas são as reais do RM** (não a hora em que o job rodou) —
-por isso *não* faz sentido deletar/recriar deals: o RD carimba `created_at`/mudanças de
-etapa com "agora" e não permite backdatar.
-
-### 12.3 Execução — cron horário, gatilho na matrícula e disparo LOCAL
-
-- **Cron (rede de segurança):** `/etc/cron.d/csa-conciliar` roda o job **de hora em hora**
-  (`15 * * * *`) na VM: `POST /api/jobs/conciliar-matriculas` (guard `x-cron-secret`).
-- **Tempo quase real:** ao efetivar a matrícula, `POST /api/matricula` dispara a
-  conciliação **da inscrição** (best-effort, não bloqueia) — o deal entra em *Cadastro de
-  matrícula* na hora.
-- **Disparo LOCAL (on-demand, do Mac):** `plataforma/scripts/conciliar-matriculas-local.mjs`
-  — lê o RM de produção (via `.env.local`) e atualiza o RD pela API (mover etapa + valor +
-  campos), **sem depender do cron**. DRY por padrão; `--commit` aplica:
-
-  ```bash
-  cd plataforma
-  node --env-file=.env.local scripts/conciliar-matriculas-local.mjs            # prévia (dry-run)
-  node --env-file=.env.local scripts/conciliar-matriculas-local.mjs --commit   # aplica no RD
-  ```
-
-  Os IDs de etapas/campos/produto são defaults embutidos (não são segredos; sobrescrevíveis
-  por env). Só o `RD_CRM_TOKEN` e as credenciais do banco vêm do `.env.local`. Não dispara
-  eventos de Marketing (ficam com o cron, para não duplicar conversões).
-
-### 12.4 Código e ambiente
-
-- **Núcleo:** `plataforma/lib/marketing/conciliar-matriculas.ts` (`conciliarMatriculas`),
-  usado pela rota do cron **e** pelo commit da matrícula (opção `apenasInscricao`).
-- **CRM:** `plataforma/lib/marketing/rdcrm.ts` — `moverNegociacaoParaEtapa`,
-  `ajustarValorReservaDeal`, `atualizarCamposMatriculaDeal`.
-- **SQL:** `plataforma/lib/totvs/queries.ts` — `listarMatriculasParaConciliarReserva`
-  (estado da reserva + pai/mãe/resp. financeiro + data de cadastro).
-- **Envs (VM `/etc/csa-portal/.env`):** `RD_CRM_DEAL_STAGE_CADASTRO_MATRICULA_ID`,
-  `RD_CRM_DEAL_STAGE_PRE_MATRICULA_ID`, `RD_CRM_DEAL_STAGE_MATRICULADO_ID`,
-  `RD_CRM_PRODUCT_RESERVA_ID`, `RD_CRM_CF_PAI_ID`, `RD_CRM_CF_MAE_ID`,
-  `RD_CRM_CF_RESP_FINANCEIRO_ID`, `RD_CRM_CF_DATA_CADASTRO_ID`, `RD_CRM_CF_DATA_PAGAMENTO_ID`.
-
-> **Portal (correlato):** no assistente de matrícula, o passo "responsável financeiro"
-> agora permite **"Outra pessoa (cadastrar)"** além de reaproveitar Filiação 1/2 — grava a
-> pessoa distinta via `SalvarDadosPesoaisUsuarios` (`EHRESPFIN='T'`) e valida débitos pelo
-> CPF dela. (`plataforma/components/WizardMatricula.tsx`.)
+**Limitação da API:** a *Conversão via API Key* **não aceita data de evento** (é datada no
+recebimento); idem a criação de deal no CRM. Logo, não dá para "recriar" a data original por
+esse caminho. **Estratégia (idempotente, 1×):** script lê o RM (SQL), dispara `boleto-gerado`
+(dedup por e-mail) e cria/atualiza o deal (buscando por IDLAN antes, para não duplicar);
+preserva a data original em **campo personalizado**. Aceitável para o volume atual — só a
+linha do tempo do evento marca a data do backfill.
 
 ---
 
-## 13. Segurança e LGPD (resumo)
+## 14. Segurança e LGPD (resumo)
 
-- **Token só no servidor.** `RD_STATION_TOKEN` e `RD_CRM_TOKEN` vivem no
-  `.env.local`/ambiente; nunca no bundle do cliente. As libs são `server-only`.
-  (Apenas `NEXT_PUBLIC_RD_TRACKING_UUID` é público por natureza — é o id do
-  script de rastreamento que roda no navegador.)
-- **E-mail completo nunca vai ao cliente.** O reconhecimento devolve só
-  `emailMascarado`; o e-mail bruto é usado apenas no servidor para o evento de funil.
-- **Consentimento.** O formulário de interesse exige consentimento explícito
-  (`cf_consentimento_lgpd`). O responsável reconhecido já tem relação com a
-  instituição (base legal de execução/legítimo interesse no processo de matrícula).
-- **Marketing nunca bloqueia.** Qualquer falha do RD é tolerada e apenas logada.
-- **Rate-limit** nas rotas de captura para conter abuso/enumeração.
+- **Token só no servidor.** `RD_STATION_TOKEN` e `RD_CRM_TOKEN` no ambiente; libs
+  `server-only`. Apenas `NEXT_PUBLIC_RD_TRACKING_UUID` e `NEXT_PUBLIC_GOOGLE_ADS_ID` são
+  públicos por natureza (rodam no navegador, sob consentimento).
+- **E-mail completo nunca vai ao cliente.** O reconhecimento devolve só `emailMascarado`; o
+  e-mail bruto é usado apenas no servidor.
+- **Consentimento** governa Meta (CAPI) e Google Ads. O evento de funil do RD é server-side
+  e é enviado independentemente do opt-in de marketing (decisão a alinhar — §10.2.8).
+- **Marketing nunca bloqueia** — falha do RD é tolerada e só logada.
+- **Jobs protegidos** por `CRON_SECRET` (tempo constante); rotas de captura com rate-limit.

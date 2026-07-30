@@ -1,4 +1,5 @@
 import "server-only";
+import { fetchComRetentativa } from "./retry";
 
 // ---------------------------------------------------------------------------
 // Camada de marketing — RD Station (Passo 1: eventos de funil via API Key)
@@ -129,7 +130,9 @@ export async function registrarEventoFunil(ev: EventoFunil): Promise<void> {
   }
 
   try {
-    const res = await fetch(
+    // Retentativa com backoff em 429/5xx e erros de rede: sem cron de conciliação,
+    // o Marketing não tem segunda chance de espelhar o evento (ver ./retry.ts).
+    const res = await fetchComRetentativa(
       `${RD_CONVERSIONS_URL}?api_key=${encodeURIComponent(token)}`,
       {
         method: "POST",
@@ -137,7 +140,12 @@ export async function registrarEventoFunil(ev: EventoFunil): Promise<void> {
         body: JSON.stringify(payload),
       },
     );
-    if (!res.ok) {
+    if (!res) {
+      console.warn(
+        "[rdstation] falha de rede ao enviar evento (esgotou retentativas):",
+        identificador,
+      );
+    } else if (!res.ok) {
       console.warn("[rdstation] resposta não-OK:", res.status, identificador);
     }
   } catch (e) {

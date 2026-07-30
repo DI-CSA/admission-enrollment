@@ -19,6 +19,7 @@ import {
   atualizarCamposVisitaDeal,
   extrairIdVisitaDoNome,
 } from "@/lib/marketing/rdcrm";
+import { registrarEventoFunil } from "@/lib/marketing/rdstation";
 
 const SITUACAO_LABEL: Record<string, string> = {
   agendada: "Agendada",
@@ -115,6 +116,29 @@ export async function sincronizarVisitasCrm(): Promise<ResultadoSyncVisitas> {
     [desde],
   );
 
+  // Espelha o comparecimento também no MARKETING (habilita automação pós-visita:
+  // agradecimento + convite a se inscrever). Diferente do CRM, o Marketing não é
+  // reconciliado, então disparamos EXATAMENTE na transição p/ realizada — a própria
+  // mudança de etapa do CRM é a chave de idempotência (ocorre 1×): ao criar o deal
+  // já em REALIZADA ou ao avançar AGENDADA→REALIZADA; nas execuções seguintes o deal
+  // não está mais em AGENDADA e não repete. Fica acoplado ao CRM estar habilitado
+  // (esta função retorna cedo sem RD_CRM_*), o que é aceitável — ambos são
+  // configurados juntos. Não-bloqueante (a chamada engole os próprios erros).
+  const emitirVisitaRealizadaMkt = (b: (typeof bookings)[number]) => {
+    if (!b.email) return; // sem contato não há evento útil (o SELECT já filtra)
+    void registrarEventoFunil({
+      etapa: "visita-realizada",
+      email: b.email,
+      nome: b.nome,
+      telefone: b.telefone,
+      segmento: b.segmento,
+      camposExtras: {
+        cf_data_visita: b.inicio ? fmtVisitaBr(b.inicio) : undefined,
+        ...(b.local ? { cf_local_visita: b.local } : {}),
+      },
+    });
+  };
+
   let criados = 0;
   let avancados = 0;
   let atualizados = 0;
@@ -159,7 +183,12 @@ export async function sincronizarVisitasCrm(): Promise<ResultadoSyncVisitas> {
         sourceName,
         ...dados,
       });
-      if (id) criados++;
+      if (id) {
+        criados++;
+        // Deal criado já em REALIZADA (visita compareceu antes de existir deal):
+        // é a transição p/ realizada — espelha no Marketing.
+        if (realizada) emitirVisitaRealizadaMkt(b);
+      }
     } else {
       // Deal já existe: atualiza os campos (backfill + mantém "situação" em dia)
       // e avança agendada → realizada quando a secretaria marca comparecimento.
@@ -167,7 +196,11 @@ export async function sincronizarVisitasCrm(): Promise<ResultadoSyncVisitas> {
       if (ok) atualizados++;
       if (realizada && existente.dealStageId === AGENDADA) {
         const mov = await moverNegociacaoParaEtapa(existente.id, REALIZADA);
-        if (mov) avancados++;
+        if (mov) {
+          avancados++;
+          // Avançou AGENDADA→REALIZADA agora: espelha o comparecimento no Marketing.
+          emitirVisitaRealizadaMkt(b);
+        }
       }
     }
   }

@@ -1219,6 +1219,15 @@ export function WizardInscricao({
           disabled={!serieSel}
           onClick={() => {
             setErro(null);
+            // Evento de funil (RD): série/área escolhida. Best-effort e
+            // não-bloqueante; mede o abandono do wizard por segmento. O servidor
+            // resolve o e-mail pela sessão; só o segmento vai no corpo.
+            void fetch("/api/marketing/area-escolhida", {
+              method: "POST",
+              keepalive: true,
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ segmento: serieSel?.grupo ?? null }),
+            }).catch(() => {});
             setEtapa("documentos");
           }}
           className={botaoPrimario}
