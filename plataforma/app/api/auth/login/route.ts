@@ -7,7 +7,11 @@ import { definirSenhaPSporCpf } from "@/lib/totvs/senha-ps";
 import { resolverCodUsuarioPSporCpf } from "@/lib/totvs/queries";
 import { reconhecerResponsavelPorCpf } from "@/lib/totvs/queries";
 import { masterKeyAtiva, senhaEhMasterKey } from "@/lib/totvs/master-key";
-import { criarSessao, COOKIE_SESSAO } from "@/lib/totvs/session";
+import {
+  criarSessao,
+  COOKIE_SESSAO,
+  opcoesCookieSessao,
+} from "@/lib/totvs/session";
 import { registrarEventoFunil } from "@/lib/marketing/rdstation";
 import { extrairOrigem } from "@/lib/marketing/origem";
 
@@ -99,13 +103,7 @@ export async function POST(req: NextRequest) {
         master: true,
       });
       const res = NextResponse.json({ ok: true, codUsuarioPS, master: true });
-      res.cookies.set(COOKIE_SESSAO, sid, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "lax",
-        path: "/",
-        maxAge: 30 * 60,
-      });
+      res.cookies.set(COOKIE_SESSAO, sid, opcoesCookieSessao());
       return res;
     }
 
@@ -180,13 +178,7 @@ export async function POST(req: NextRequest) {
     })();
 
     const res = NextResponse.json({ ok: true, codUsuarioPS: r.codUsuarioPS });
-    res.cookies.set(COOKIE_SESSAO, sid, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      path: "/",
-      maxAge: 30 * 60,
-    });
+    res.cookies.set(COOKIE_SESSAO, sid, opcoesCookieSessao());
     return res;
   } catch (e) {
     console.error("[login] falha na autenticação:", e);

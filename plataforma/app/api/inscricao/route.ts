@@ -36,6 +36,7 @@ import {
   criarSessao,
   encerrarSessao,
   COOKIE_SESSAO,
+  opcoesCookieSessao,
 } from "@/lib/totvs/session";
 
 export const dynamic = "force-dynamic";
@@ -1045,13 +1046,7 @@ export async function POST(req: NextRequest) {
       ...(ehNovo ? { logado: sid != null } : {}),
     });
     if (sid) {
-      res.cookies.set(COOKIE_SESSAO, sid, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "lax",
-        path: "/",
-        maxAge: 30 * 60,
-      });
+      res.cookies.set(COOKIE_SESSAO, sid, opcoesCookieSessao());
     }
     return res;
   } catch (e) {

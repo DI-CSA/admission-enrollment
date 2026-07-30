@@ -8,6 +8,27 @@ import { loginResponsavel } from "./auth";
 
 export const COOKIE_SESSAO = "sid";
 const TTL_MS = 30 * 60 * 1000; // 30 min
+/** Max-age do cookie `sid`, em segundos — espelha o TTL da sessão no servidor. */
+export const MAX_AGE_COOKIE_SESSAO = TTL_MS / 1000;
+
+/**
+ * Opções canônicas do cookie de sessão `sid`. Centralizadas para que login,
+ * cadastro e a RENOVAÇÃO deslizante (heartbeat via `/api/auth/me`) usem exatamente
+ * os mesmos atributos. O `maxAge` é ABSOLUTO a partir do momento em que o cookie é
+ * emitido; como a sessão do servidor é deslizante, o cookie precisa ser REEMITIDO
+ * periodicamente (heartbeat) — do contrário o navegador o descarta 30 min após o
+ * login, mesmo com o usuário ativo (era a causa do erro "nao-autenticado" no passo
+ * de documentos, que fica longos minutos sem nenhuma requisição).
+ */
+export function opcoesCookieSessao() {
+  return {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax" as const,
+    path: "/",
+    maxAge: MAX_AGE_COOKIE_SESSAO,
+  };
+}
 
 export interface SessaoBFF {
   rmCookie: string;

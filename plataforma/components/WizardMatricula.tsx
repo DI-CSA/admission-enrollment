@@ -906,6 +906,25 @@ export function WizardMatricula({
     void carregarDados();
   }, [carregarDados]);
 
+  // Heartbeat da sessão: o passo de documentos fica minutos sem NENHUMA
+  // requisição enquanto o usuário anexa arquivos, e a sessão do BFF expira em
+  // 30 min. Um ping periódico a /api/auth/me desliza a sessão no servidor e
+  // reemite o cookie `sid` (max-age renovado), evitando o 401 "nao-autenticado"
+  // ao avançar. Se a sessão já tiver morrido, encaminha ao login.
+  useEffect(() => {
+    const INTERVALO_MS = 5 * 60 * 1000; // 5 min (TTL da sessão é 30 min)
+    const id = setInterval(() => {
+      void fetch("/api/auth/me", { cache: "no-store" })
+        .then((res) => {
+          if (res.status === 401 && onSessaoExpirada) onSessaoExpirada();
+        })
+        .catch(() => {
+          // rede instável: ignora; a próxima batida tenta de novo.
+        });
+    }, INTERVALO_MS);
+    return () => clearInterval(id);
+  }, [onSessaoExpirada]);
+
   // Listas de apoio (dropdowns) ---------------------------------------------
   const [listas, setListas] = useState<Record<string, ItemLista[]>>({});
   const carregandoListas = useRef<Set<string>>(new Set());
@@ -1190,6 +1209,14 @@ export function WizardMatricula({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ idps, action: "salvar", pessoa }),
       });
+      if (res.status === 401) {
+        if (onSessaoExpirada) {
+          onSessaoExpirada();
+          return false;
+        }
+        setErroPasso("Sua sessão expirou. Entre novamente.");
+        return false;
+      }
       const data = (await res.json().catch(() => null)) as
         | { ok: true }
         | { ok: false; erro?: string | null; bruto?: unknown }
@@ -1214,7 +1241,7 @@ export function WizardMatricula({
       setDepuracao(null);
       return true;
     },
-    [registros, campos, codUsuarioPS, idps, origemResp],
+    [registros, campos, codUsuarioPS, idps, origemResp, onSessaoExpirada],
   );
 
   // Débitos do responsável financeiro ---------------------------------------
@@ -1424,6 +1451,14 @@ export function WizardMatricula({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ idAreaOfertada, numeroInscricao, documentos }),
       });
+      if (res.status === 401) {
+        if (onSessaoExpirada) {
+          onSessaoExpirada();
+          return false;
+        }
+        setErroPasso("Sua sessão expirou. Entre novamente.");
+        return false;
+      }
       if (res.status === 503) {
         setErroPasso(
           "Ambiente em modo somente leitura: o envio de documentos está desativado.",
@@ -1456,6 +1491,7 @@ export function WizardMatricula({
     idAreaOfertada,
     numeroInscricao,
     idps,
+    onSessaoExpirada,
   ]);
 
   useEffect(() => {
@@ -1495,6 +1531,14 @@ export function WizardMatricula({
           arquivoContrato: null,
         }),
       });
+      if (res.status === 401) {
+        if (onSessaoExpirada) {
+          onSessaoExpirada();
+          return;
+        }
+        setErroPasso("Sua sessão expirou. Entre novamente.");
+        return;
+      }
       if (res.status === 503) {
         setErroPasso(
           "Ambiente em modo somente leitura: a efetivação está desativada.",
@@ -1545,7 +1589,14 @@ export function WizardMatricula({
     } finally {
       setSalvando(false);
     }
-  }, [numeroInscricao, idAreaOfertada, idps, planoSel, planos]);
+  }, [
+    numeroInscricao,
+    idAreaOfertada,
+    idps,
+    planoSel,
+    planos,
+    onSessaoExpirada,
+  ]);
 
   // Navegação ----------------------------------------------------------------
   async function avancar() {
