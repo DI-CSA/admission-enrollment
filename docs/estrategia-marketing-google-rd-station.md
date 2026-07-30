@@ -176,16 +176,17 @@ Tudo depende de amarrar a **mesma pessoa** ao longo de meses e entre plataformas
 | --- | --- | --- |
 | **E-mail + telefone (SHA-256)** | Cadastro do responsável | Enhanced Conversions (Ads), CAPI (Meta), contato (RD). Já feito no Meta CAPI (`meta-capi.ts`) |
 | **`event_id`** | `eventIdInscricao/Matricula` **[existe]** | Deduplicação browser × servidor (Meta hoje; estender a GA4/Ads) |
-| **`gclid` / `wbraid` / `gbraid`** | Query da landing (clique do Ads) | **[proposto]** capturar e persistir p/ Offline Conversion Import |
+| **`gclid` / `wbraid` / `gbraid`** | Query da landing (clique do Ads) | **[existe: captura]** lidos em `origem.ts` (URL + cookie de 1ª parte); **falta** persistir junto da inscrição + Offline Conversion Import |
 | **GA4 `client_id` / `session_id`** | Cookie `_ga` (ou sGTM) | Amarrar sessão do browser ao Measurement Protocol server-side |
 | **`user_id` estável** | `CODUSUARIOPS`/hash do CPF | **[proposto]** cross-device no GA4 e no BigQuery |
 | **`__trf.src`** | Rastreador RD **[existe]** | Atribuição de origem no RD (`origem.ts`) |
 | **UTMs** | Query/cookie **[existe]** | Reforço de atribuição (`origem.ts`) |
 
-**Ação-chave [proposta]:** estender `lib/marketing/origem.ts` para **capturar `gclid`/`wbraid`/
-`gbraid`** da URL na primeira visita, persistir em cookie de 1ª parte e **guardar junto da
-inscrição** (campo no RM ou store lateral). Sem isso não há Offline Conversion Import por
-GCLID — só o método por e-mail (Enhanced Conversions), que também recomendamos como reforço.
+**Ação-chave [parcial]:** a **captura** de `gclid`/`wbraid`/`gbraid` já existe em
+`lib/marketing/origem.ts` (lê da URL na visita e de cookie de 1ª parte). **Falta** persistir
+esse identificador **junto da inscrição** (campo no RM ou store lateral) e fazer o **Offline
+Conversion Import** por GCLID. Sem essa persistência+upload, só o método por e-mail (Enhanced
+Conversions) funciona, que também recomendamos como reforço.
 
 ---
 
@@ -310,7 +311,7 @@ consentimento** para os jobs.
 | **1 — Google essencial** | GTM Web; GA4 com taxonomia de funil + key events; Consent Mode v2 ligado ao `csa_consent`; captura de `gclid`; Google Ads com Enhanced Conversions for Leads; Search Console | Aquisição paga medível; consentimento correto |
 | **2 — O ciclo fechado (ouro)** | Job `exportar-conversoes-google` (offline: taxa e reserva); persistência da prova de consentimento; `Purchase` de taxa/reserva também no Meta | Ads/Meta otimizando por **matrícula real**, não por lead |
 | **3 — Inteligência de dados** | Export GA4→BigQuery; join com RM; Looker Studio; Customer Match a partir da base | Atribuição de receita por campanha; públicos de 1ª parte |
-| **4 — Escala** | sGTM em Cloud Run (cookies 1ª parte duráveis); testes de mídia (lookalike/semelhantes), automações de nutrição avançadas no RD | Durabilidade de medição e escala de aquisição |
+| **4 — Escala** | sGTM em Cloud Run (cookies 1ª parte duráveis); testes de mídia (lookalike/semelhantes); nutrição avançada no RD por **segmentações** (operação manual da equipe do parceiro) | Durabilidade de medição e escala de aquisição |
 
 ---
 

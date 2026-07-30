@@ -24,6 +24,10 @@
 | **Meta CAPI (visita)** | ✅ **Ativo** | evento `Schedule` sob consentimento |
 | **Google Ads — conversão "Inscrição Concluída"** | ✅ **Ativo** | client-side (gtag), sob consentimento de marketing |
 | **Rastreamento de origem (loader RD + UTM + gclid)** | ✅ **Ativo** | `client_tracking_id` do cookie `__trf.src` |
+| **Origem/fonte (source) preenchida via API** | ✅ **Ativo** | `traffic_source` (Mkt) + `deal_source.name` (CRM) — **não editar à mão** (§5.4/§7.3) |
+| **Temperatura do deal (`rating` — quente/morno/frio)** | ❌ **Não definido pelo sistema** | manual no CRM — equipe do parceiro, à mão (§5.4/§10.4) |
+| **Estágio de ciclo de vida (Marketing: Lead→Cliente)** | ⚙️ **Configuração do parceiro** | mapeamento evento→estágio (config única) + sync nativa `cf_plug_*` (§5.4) |
+| **Qualificação / lead scoring** | ❌ **Não automatizado** | sem flag/pontuação; classificação manual da equipe (§5.4/§10.4) |
 | **Evento de topo `lead-captado` / rota `/api/lead`** | ❌ **Não existe** | declarado no type, **nunca emitido** (ver §4 e §10) |
 | **Evento intermediário `area-escolhida`** | ✅ **Ativo** | beacon no wizard ao escolher a série (mede abandono por segmento) |
 | **`visita-realizada` como evento de Marketing** | ✅ **Ativo** | emitido no cron de visitas na transição p/ *realizada* (§6.2/§8.3) |
@@ -270,6 +274,48 @@ automaticamente** pela sincronização nativa "Plug" (CRM → Marketing) e refle
 etapa/funil/valor/origem da negociação. Ao criarmos o deal, esses campos do contato passam
 a ser alimentados sozinhos — que é o que queremos.
 
+### 5.4 Temperatura, qualificação e origem — o que é automático e o que NÃO editar à mão
+
+> **Orientação ao operador do RD.** Muitas transições de etapa (CRM) e a classificação de
+> funil (Marketing) são **automatizadas via API** pelo BFF. Editar esses itens à mão gera
+> conflito: ou o próximo processo automático **sobrescreve**, ou quebra a consistência do
+> pipeline. Esta seção existe para **evitar intervenções equivocadas**.
+
+**Temperatura do deal (`rating` — quente/morno/frio):** **não é enviada** pelo sistema (o
+código não define `rating`, assim como não envia `campaign`, `amount_unique` nem
+`prediction_date` — §5.2). Portanto, **não há** ajuste automático de temperatura ao gerar ou
+pagar o boleto. Ela fica **manual** no CRM: como o parceiro **opera o RD à mão** (sem
+automações), a **equipe** define a temperatura seguindo regras objetivas simples (§10.4). O que
+o sistema automatiza é a **etapa** (`deal_stage_id`), dirigida pelo pagamento real — que já é
+um bom *proxy* de temperatura (quem está em *Taxa paga* está mais quente que quem está em
+*Inscrito*).
+
+**Qualificação / lead scoring:** não há flag automática nem pontuação. O sistema (a) envia os
+**eventos** cujos `conversion_identifier` o parceiro **mapeia** para estágios de ciclo de vida
+(Lead → Lead Qualificado → Oportunidade → Cliente) na configuração do funil do RD; (b) envia
+`cf_responsavel_reconhecido` (reconhecido × novo); (c) move a **etapa do deal**, que reflete
+ao contato via sincronização nativa `cf_plug_*`. Ou seja, os rótulos "Lead Qualificado" das
+tabelas §4 são a **intenção de mapeamento** — realizada pelo parceiro no RD, **não** decidida
+pelo código.
+
+**Origem/fonte:** preenchida **via API** — `traffic_source` (Marketing) e `deal_source.name`
+(CRM), com atribuição real (cookie `__trf.src`/UTM) ou fallback `RD_SOURCE_PADRAO` (§7.3).
+**Não editar à mão** — a edição manual conflita com a atribuição real.
+
+**Resumo operacional.** No RD, **NÃO** altere manualmente:
+
+- **etapa do deal** nas fases automáticas (*Inscrito → Taxa paga → Cadastro de matrícula →
+  Pré-matrícula*; *Visita agendada → Visita realizada*) — o cron sobrescreve/avança;
+- **valor e produtos** do deal (taxa / reserva R$2.200);
+- **`deal_source` / `traffic_source`** (origem);
+- **campos personalizados alimentados pela automação** (§5.2) e os **`cf_plug_*`** do contato
+  (§5.3).
+
+No RD, **FAÇA** manualmente: marcar **`Matriculado`** (etapa final, não automatizada),
+**temperatura (`rating`)**, **motivos de perda** (lost reasons), **qualificação** (classificada
+à mão — §10.4), anotações/tarefas/atividades, e as **comunicações de nutrição (disparadas
+manualmente pela equipe), segmentações e relatórios**.
+
 ---
 
 ## 6. Agendador de visitas → RD (topo de funil real)
@@ -443,18 +489,21 @@ conversões offline** (matrícula) — ver [estrategia-marketing-google-rd-stati
 
 2. **Abandono intra-wizard.** ✅ **Implementado.** `area-escolhida` agora dispara (beacon do
    wizard ao escolher a série), permitindo medir onde o wizard perde gente **por segmento** e
-   nutrir "quase-inscritos". *(Ação restante — parceiro: montar a segmentação/automação sobre
-   `inscricao-2027-area-escolhida-<segmento>` sem `boleto-gerado`.)*
+   trabalhar "quase-inscritos". *(Ação restante — a equipe do parceiro cria a **segmentação**
+   `inscricao-2027-area-escolhida-<segmento>` sem `boleto-gerado` e faz o **contato manual**;
+   o parceiro opera o RD à mão, sem automações.)*
 
 3. **Comparecimento à visita no Marketing.** ✅ **Implementado.** `visita-realizada` agora é
    emitido também no Marketing (no cron de visitas, na transição p/ *realizada* — §6.2/§8.3),
-   habilitando automação pós-visita. *(Ação restante — parceiro: criar o fluxo "compareceu →
-   agradecimento + convite a se inscrever" sobre `inscricao-2027-visita-realizada`.)*
+   habilitando o contato pós-visita. *(Ação restante — a equipe do parceiro **envia
+   manualmente** "compareceu → agradecimento + convite a se inscrever" à segmentação
+   `inscricao-2027-visita-realizada`.)*
 
-4. **Automação de recuperação de boleto ainda não configurada no RD.** Já **temos o dado**
-   (`boleto-gerado` sem `pagamento-confirmado`). **Recomendação:** o parceiro cria o fluxo
-   de nutrição "gerou taxa e não pagou em N dias → lembrete" — ganho rápido, sem código
-   novo. **Receita pronta para o parceiro em §12.4.** *(Prioridade alta — receita direta.)*
+4. **Recuperação de boleto ainda não operada no RD.** Já **temos o dado** (`boleto-gerado` sem
+   `pagamento-confirmado`). **Recomendação:** a equipe do parceiro trabalha **manualmente** a
+   segmentação "gerou taxa e não pagou em N dias → lembrete" (o parceiro não automatiza) —
+   ganho rápido, sem código novo. **Rotina pronta em §12.4.** *(Prioridade alta — receita
+   direta.)*
 
 5. **Retry/backoff em 429/5xx.** ✅ **Implementado** para os eventos de Marketing
    (`lib/marketing/retry.ts`: retentativa com backoff exponencial + jitter em 429/5xx e erro
@@ -487,14 +536,65 @@ conversões offline** (matrícula) — ver [estrategia-marketing-google-rd-stati
 
 | Prioridade | Item | Quem faz | Status |
 | --- | --- | --- | --- |
-| 🔴 Alta | Automação de recuperação de boleto (§10.2.4 / receita §12.4) | Parceiro (RD) | ⏳ Pendente (parceiro) |
+| 🔴 Alta | Rotina (manual) de recuperação de boleto (§10.2.4 / receita §12.4) | Equipe do parceiro | ⏳ Pendente (parceiro) |
 | 🔴 Alta | Governança: sources, UTMs, tipos de campo, lost reasons (§10.2.7) | Parceiro + escola | ⏳ Pendente |
 | 🔴 Alta | Topo de funil anônimo — `/api/lead` **ou** LP nativa do RD (§10.2.1) | Dev **ou** Parceiro | ⏳ Pendente |
 | 🟡 Média | Abandono por segmento — `area-escolhida` (§10.2.2) | Dev ✅ + Parceiro (segmentação) | ✅ Código feito |
-| 🟡 Média | `visita-realizada` no Marketing + nutrição pós-visita (§10.2.3) | Dev ✅ + Parceiro (automação) | ✅ Código feito |
+| 🟡 Média | `visita-realizada` no Marketing + contato pós-visita (§10.2.3) | Dev ✅ + Parceiro (contato manual) | ✅ Código feito |
 | 🟡 Média | Retry/backoff nos eventos de Marketing (§10.2.5) | Dev | ✅ Feito |
 | 🟡 Média | Passo 2 — OAuth + Events API + Webhooks (§10.2.6) | Dev | ⏳ Pendente |
+| 🟡 Média | Padronizar classificação de leads (manual, tabela de referência) (§10.4) | Equipe do parceiro | ⏳ Recomendado |
 | 🟢 Baixa | Higiene técnica (§10.2.9) | Dev | ⏳ Pendente |
+
+---
+
+### 10.4 Recomendação: padronizar a classificação de leads (temperatura + qualificação) — manual
+
+> **Contexto.** Temperatura (`rating`) e qualificação **não** são automatizadas (§5.4) e o
+> **parceiro opera o RD manualmente** (sem construir automações/fluxos). Como os marcos de
+> avanço são **objetivos e lastreados no ERP** (boleto gerado, taxa paga), a recomendação **não**
+> é automatizar — é dar à equipe uma **tabela de referência objetiva** para classificar **à
+> mão** de forma consistente entre operadores. O código já entrega o dado objetivo (a **etapa**);
+> a equipe só **lê e registra** de forma padronizada.
+
+**Separação de responsabilidades (reforço de §5.4):** código = **fato objetivo** (etapa do
+deal, dirigida pelo pagamento real do RM); operação humana no RD = **leitura comercial**
+(temperatura, qualificação, priorização).
+
+**1. Qualificação — regra por etapa (registro manual).** A etapa do deal já avança sozinha
+(evento/pagamento). Ao trabalhar a lista, a equipe registra a qualificação seguindo:
+
+| Etapa do candidato | Classificação a registrar |
+| --- | --- |
+| `visita-agendada`, `login-responsavel`, `cadastro-novo-responsavel` | Lead |
+| `visita-realizada`, `inscricao-iniciada`, `area-escolhida` | Lead Qualificado (MQL) |
+| `boleto-gerado` | Oportunidade (SQL) |
+| `pagamento-confirmado` | Cliente |
+
+> *Obs.:* o mapeamento `conversion_identifier` → estágio de ciclo de vida no **RD Marketing** é
+> uma **configuração única** (não uma automação em execução) e pode ser mantido pelo parceiro se
+> desejado; independente disso, a classificação comercial no CRM é manual.
+
+**2. Temperatura (`rating`) — tabela de referência + bom senso.** A equipe define a
+temperatura **à mão** ao abrir o cartão, partindo de um piso pela etapa (Inscrito/Visita
+realizada → morno; Taxa paga em diante → quente; só agendou/cadastrou → frio/morno) e ajustando
+pelo contexto (conversa, hesitação, irmão já matriculado).
+
+**3. Priorização.** Sem lead scoring automático: a equipe usa as **segmentações** salvas
+(`pagamento-confirmado`, `boleto-gerado` sem pagamento, etc.) para ordenar o contato do dia.
+
+**Permanece julgamento humano:** desqualificação + **lost reason**, ajuste fino de temperatura,
+atividades/tarefas.
+
+**Cuidados:**
+- Transformar a classificação em **rotina** (ex.: revisar a lista 1×/dia) para não desatualizar.
+- A defasagem de `pagamento-confirmado` (cron 08h/18h, §8.1) atrasa a virada para "quente" em
+  até ~12h — um pago recente pode aparecer ainda como Inscrito.
+- Temperatura deve **agregar** priorização intra-etapa, não duplicar o estágio.
+- **Regras simples** (uma tabela que todos seguem) valem mais que critérios complexos.
+
+> Versão não técnica desta recomendação (para o parceiro/equipe):
+> [resumo-rd-station-nao-tecnico.md](resumo-rd-station-nao-tecnico.md) §6.4.
 
 ---
 
@@ -579,17 +679,22 @@ conversões offline** (matrícula) — ver [estrategia-marketing-google-rd-stati
 9. **Sources** (deixar o código criar pelo nome) e **Lost reasons** (cadastrar: "Desistiu",
    "Matriculou em outra escola", "Não pagou a taxa"…).
 
-### 12.3 Operação contínua (parceiro)
+### 12.3 Operação contínua (parceiro — manual)
 
-10. **Segmentações** por série, etapa, "reconhecido × novo".
-11. **Automações de nutrição:** boas-vindas, **lembrete de boleto** (receita §12.4),
-    pós-visita (§10.2.3), reengajamento de abandono do wizard (§10.2.2).
+> O parceiro **opera o RD à mão**, sem construir automações/fluxos. Os itens abaixo são
+> **rotinas da equipe** apoiadas em segmentações salvas.
+
+10. **Segmentações** por série, etapa, "reconhecido × novo" (config única; base para as rotinas).
+11. **Comunicações de nutrição (disparo manual):** boas-vindas, **lembrete de boleto** (rotina
+    §12.4), pós-visita (§10.2.3), reengajamento de abandono do wizard (§10.2.2).
 12. **Relatórios** de origem → matrícula e de tempo entre etapas.
 
-### 12.4 Receita — automação de recuperação de boleto (parceiro, sem código)
+### 12.4 Rotina — recuperação de boleto (parceiro, manual, sem código)
 
-> **Objetivo:** lembrar quem **gerou a taxa de inscrição e não pagou**. O dado já existe no
-> RD — nenhuma mudança de código é necessária, só a automação abaixo no RD Marketing.
+> **Objetivo:** contatar quem **gerou a taxa de inscrição e não pagou**. O dado já existe no
+> RD — nenhuma mudança de código é necessária. Como o parceiro **opera o RD manualmente**, esta
+> é uma **rotina da equipe** (não uma automação em execução): a segmentação abaixo entrega a
+> lista pronta; a equipe a trabalha periodicamente.
 
 **O dado que já chega ao RD:**
 - quem **gerou** a taxa → conversão `inscricao-2027-boleto-gerado` (com variantes por série,
@@ -598,27 +703,27 @@ conversões offline** (matrícula) — ver [estrategia-marketing-google-rd-stati
 - reforço: o contato carrega `cf_etapa_funil` e (no `boleto-gerado`) `cf_numero_inscricao`,
   `cf_valor_taxa`, `cf_nome_candidato`, `cf_processo_seletivo`.
 
-**Público-alvo (segmentação):**
-- **converteu** em `inscricao-2027-boleto-gerado` (qualquer série)
-- **E não** converteu em `inscricao-2027-pagamento-confirmado`.
+**Segmentação (a lista da rotina):**
+- **converteu** em `inscricao-2027-boleto-gerado` (qualquer série),
+- **E não** converteu em `inscricao-2027-pagamento-confirmado`,
+- **E** há **≥ 2 dias** da geração do boleto.
 
-**Fluxo de automação sugerido (RD Marketing → Automação):**
-1. **Entrada:** converteu em `inscricao-2027-boleto-gerado`.
-2. **Espera:** aguardar **N dias** (sugestão: **2 a 3 dias**).
-3. **Condição:** o contato **converteu** em `inscricao-2027-pagamento-confirmado`?
-   - **Sim →** encerrar (já pagou; não incomodar).
-   - **Não →** enviar **e-mail 1** — "sua taxa de inscrição está aguardando pagamento"
-     (com nome do candidato/processo via campos personalizados; incluir instruções/2ª via).
-4. **(Opcional) 2º toque:** esperar mais **N dias**, reavaliar a mesma condição e, se ainda
-   não pago, enviar **e-mail 2** (última chamada) e/ou notificar a secretaria.
+**Rotina manual sugerida (ex.: 1×/dia):**
+1. Abrir a segmentação acima.
+2. Para cada contato, **conferir** se já há `inscricao-2027-pagamento-confirmado`. Se sim,
+   **pular** (já pagou; não incomodar).
+3. Para os não pagos, **enviar** o lembrete — "sua taxa de inscrição está aguardando
+   pagamento" (nome do candidato/processo via campos personalizados; incluir instruções/2ª
+   via). Canal: **e-mail** (disparo manual à segmentação), **WhatsApp** ou **ligação**.
+4. **(Opcional) 2º toque:** após mais **N dias**, repetir para quem ainda não pagou (última
+   chamada) e/ou notificar a secretaria.
 
 **Cuidados importantes:**
 - **Defasagem do `pagamento-confirmado`:** ele é conciliado por **cron 08h/18h** (§8.1), não
   em tempo real. Por isso use **N ≥ 1 dia** entre gerar e lembrar — janelas curtas (horas)
   gerariam **falso-lembrete** para quem já pagou mas ainda não foi conciliado.
-- **Saída imediata ao pagar:** garanta que a automação **encerre** o contato assim que
-  `pagamento-confirmado` chegar (condição de saída), para não enviar lembrete depois do
-  pagamento.
+- **Confira antes de enviar:** como o disparo é manual, verifique o status atual do contato
+  para não cobrar quem já pagou.
 - **Frequência:** no máximo 2 lembretes; respeitar opt-out e horários de envio.
 
 ---

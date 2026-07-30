@@ -86,11 +86,13 @@ em [docs/tech-info.md](docs/tech-info.md).
 ## Índice da documentação (`docs/`)
 
 - [arquitetura_nextjs_rm.md](docs/arquitetura_nextjs_rm.md) — **fonte da verdade** da arquitetura (BFF, RM, módulos).
+- [autenticacao-totvs-rm.md](docs/autenticacao-totvs-rm.md) — guia técnico de autenticação por CPF via WebAPI EduPS: reconhecimento, envelope de senha (hash), sincronização e controle de sessão.
 - [tech-info.md](docs/tech-info.md) — servidores/IPs TOTVS, superfícies de integração, ambiente de homologação.
 - [runbook-deploy-portal.md](docs/runbook-deploy-portal.md) — como operar/deployar em produção.
 - [plano_deploy_gcp.md](docs/plano_deploy_gcp.md) — estratégia de deploy (o "porquê").
 - [integracao_rd_station.md](docs/integracao_rd_station.md) — funil, campos e conciliações RD.
 - [resumo-estrategico-rd-station.md](docs/resumo-estrategico-rd-station.md) — visão executiva do RD.
+- [resumo-rd-station-nao-tecnico.md](docs/resumo-rd-station-nao-tecnico.md) — guia detalhado do processo RD **sem código**, com glossário (para equipe não-técnica e parceiro de marketing).
 - [integracao_meta.md](docs/integracao_meta.md) — Meta Pixel + CAPI + consentimento.
 - [estrategia-marketing-google-rd-station.md](docs/estrategia-marketing-google-rd-station.md) — estratégia de captação/marketing/CRM (Google + RD, nível ouro).
 - [plano-matricula-online-candidatos-aprovados.md](docs/plano-matricula-online-candidatos-aprovados.md) — plano do módulo de matrícula.

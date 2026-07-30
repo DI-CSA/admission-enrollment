@@ -126,16 +126,38 @@ atribuição de origem; consentimento governando Meta/Google; **automação de e
 pelo pagamento real** (idempotente, forward-only); e **jornada consolidada** (visita +
 inscrição no mesmo deal, evitando duplicidade).
 
+### ✅ Implementado recentemente (dev)
+
+Itens que **eram propostas** na versão anterior e já estão no ar do lado do sistema — falta só
+a ação do parceiro no RD, quando indicada:
+
+- **`area-escolhida`** — o abandono no formulário agora é medido **por série/segmento**.
+  *(Falta a equipe do parceiro: contatar manualmente quem escolheu a série e não concluiu.)*
+- **`visita-realizada` no Marketing** — o comparecimento à visita, que antes só existia no CRM,
+  agora também dispara evento de Marketing. *(Falta a equipe do parceiro: enviar agradecimento +
+  convite a se inscrever.)*
+- **Retry/backoff nos eventos de Marketing** — se um envio falhar por instabilidade de rede, o
+  sistema **reenvia automaticamente**. *(Concluído.)*
+
+> ⚠️ **Automático × manual — evitar intervenções equivocadas.** Boa parte das **transições de
+> etapa no CRM** e da **classificação de funil no Marketing** é feita **automaticamente pelo
+> sistema** (via API, a partir do pagamento real) — editar esses itens à mão no RD pode ser
+> sobrescrito pela automação. Já a **temperatura do lead** (quente/morno/frio), a
+> **qualificação** e os **motivos de perda** **não** são tocados pelo sistema: são
+> manuais/parceiro. O guia operacional completo (o que **não** mexer à mão × o que **é**
+> manual) está na versão não técnica:
+> [resumo-rd-station-nao-tecnico.md](resumo-rd-station-nao-tecnico.md) §6.
+
 ### 🔧 Oportunidades de refino (priorizadas)
 
 | Prioridade | Oportunidade | Ganho | Quem faz |
 | --- | --- | --- | --- |
-| 🔴 Alta | **Recuperação de boleto:** fluxo "gerou taxa e não pagou em N dias → lembrete". O dado já existe. | Receita direta, sem código novo | Parceiro (RD) |
+| 🔴 Alta | **Recuperação de boleto:** rotina manual "gerou taxa e não pagou em N dias → lembrete". O dado/lista já existe. | Receita direta, sem código novo | Equipe do parceiro |
 | 🔴 Alta | **Governança:** padronizar *sources*, UTMs de campanha, **motivos de perda** e **tipos** dos campos (valor como número/moeda). | Relatórios confiáveis | Parceiro + escola |
 | 🔴 Alta | **Topo de funil anônimo:** formulário/LP de interesse (lead frio) para nutrir antes da inscrição. | Mais leads no topo | Parceiro (LP nativa) ou Dev |
-| 🟡 Média | **Nutrição pós-visita:** hoje o comparecimento só existe no CRM; levá-lo ao Marketing habilita automação de agradecimento/convite. | Converte quem visitou | Dev + Parceiro |
-| 🟡 Média | **Medir abandono no wizard** (evento por passo). | Recupera "quase-inscritos" | Dev |
-| 🟡 Média | **Confiabilidade:** retry/backoff nos eventos de Marketing (hoje "dispare e esqueça"). | Menos evento perdido | Dev |
+| 🟡 Média | **Contato pós-visita:** enviar (manualmente) agradecimento + convite (base técnica pronta — `visita-realizada` já vai ao Marketing). | Converte quem visitou | Equipe do parceiro |
+| 🟡 Média | **Trabalhar "quase-inscritos":** segmentar sobre `area-escolhida` sem `boleto-gerado` e contatar à mão (base técnica pronta). | Recupera quem quase se inscreveu | Equipe do parceiro |
+| 🟡 Média | **Classificação de leads padronizada** (temperatura + qualificação): tabela de referência aplicada **à mão** pela equipe. Detalhes na versão não técnica §6.4. | Prioriza o esforço comercial; menos erro operacional | Equipe do parceiro |
 | 🟡 Média | **Passo 2** (OAuth + e-commerce + Webhooks): "carrinho abandonado" oficial e relatórios de receita. | Atribuição fina de receita | Dev |
 | 🟢 Baixa | **LGPD:** registrar com o parceiro/DPO a base legal do evento de visita (enviado sem opt-in). | Conformidade | Escola + Parceiro |
 
@@ -155,19 +177,20 @@ inscrição no mesmo deal, evitando duplicidade).
 
 ## 8. O que precisamos do parceiro / o que decidir juntos
 
-1. **Automações de nutrição** (prioridade na recuperação de boleto) — conteúdos e gatilhos.
+1. **Rotinas de nutrição/contato** (prioridade na recuperação de boleto) — conteúdos, cadência
+   e **quem** faz o disparo manual (o parceiro opera o RD à mão, sem automações).
 2. **Governança de dados:** vocabulário de estágios (Oportunidade × Cliente × Inscrito ×
    Matriculado), *sources*, UTMs e **motivos de perda** padronizados.
 3. **Topo de funil:** vamos de formulário/LP **nativos do RD** (parceiro) ou construímos a
    captura no portal (dev)?
 4. **Campos personalizados:** revisar rótulos/tipos no RD (deixar valores como moeda) para
    relatórios limpos.
-5. **Divisão de responsabilidades:** escola (conteúdo/regras) × agência (campanhas,
-   automações, relatórios).
+5. **Divisão de responsabilidades:** escola (conteúdo/regras) × agência (campanhas, operação
+   manual do RD, relatórios).
 6. **LGPD:** textos de consentimento, retenção e base legal por etapa.
 
 ---
 
-> **Próximo passo sugerido:** validar este resumo, ligar a **automação de recuperação de
-> boleto** (ganho rápido) e fechar o **plano de governança** (sources/UTMs/campos) antes do
+> **Próximo passo sugerido:** validar este resumo, iniciar a **rotina (manual) de recuperação
+> de boleto** (ganho rápido) e fechar o **plano de governança** (sources/UTMs/campos) antes do
 > pico do processo 2027.
