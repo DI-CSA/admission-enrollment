@@ -4,11 +4,14 @@ import "server-only";
 // Núcleo da conciliação da PRÉ-MATRÍCULA (compartilhado por cron e commit)
 // ---------------------------------------------------------------------------
 //
-// Move a negociação do RD Station CRM conforme o estado do boleto de RESERVA de
-// matrícula (R$2.200):
-//   - reserva GERADA (STATUSLAN=0) → "Cadastro de matrícula"  (evento cadastro-matricula)
-//   - reserva PAGA   (STATUSLAN=1) → "Pré-matrícula"          (evento reserva-matricula-paga)
+// Move a negociação do RD Station CRM conforme o estado da matrícula:
+//   - reserva GERADA (STATUSLAN=0)          → "Cadastro de matrícula" (evento cadastro-matricula)
+//   - reserva PAGA   (STATUSLAN=1)          → "Pré-matrícula"         (evento reserva-matricula-paga)
+//   - matrícula ATIVA (SSTATUS.PLATIVO='S') → "Matriculado"           (evento matricula-confirmada)
 // e garante que o VALOR da negociação, nessas etapas, seja a reserva (R$2.200).
+//
+// O último movimento ("Matriculado") só ocorre se a etapa estiver configurada
+// (RD_CRM_DEAL_STAGE_MATRICULADO_ID); sem ela, o comportamento é o anterior.
 //
 // Forward-only e idempotente. Usado por:
 //   - app/api/jobs/conciliar-matriculas (cron, todas as matrículas);
@@ -42,6 +45,7 @@ export interface ResultadoConciliacaoMatriculas {
   verificadas: number;
   movidasCadastro: number;
   movidasPre: number;
+  movidasMatriculado: number;
   valoresAjustados: number;
   camposAtualizados: number;
   jaAvancadas: number;
@@ -73,6 +77,7 @@ export async function conciliarMatriculas(
     verificadas: 0,
     movidasCadastro: 0,
     movidasPre: 0,
+    movidasMatriculado: 0,
     valoresAjustados: 0,
     camposAtualizados: 0,
     jaAvancadas: 0,
@@ -85,14 +90,16 @@ export async function conciliarMatriculas(
   const { cadastro: stageCadastro, pre: stagePre, matriculado } = etapas;
 
   // Etapas "posteriores" a cada alvo (para não regredir): Cadastro < Pré < Matriculado.
-  const posterioresA = (alvo: string): Set<string> =>
-    alvo === stageCadastro
-      ? new Set(
-          [stageCadastro, stagePre, matriculado].filter(
-            (s): s is string => !!s,
-          ),
-        )
-      : new Set([stagePre, matriculado].filter((s): s is string => !!s));
+  const posterioresA = (alvo: string): Set<string> => {
+    if (matriculado && alvo === matriculado) return new Set([matriculado]);
+    if (alvo === stageCadastro)
+      return new Set(
+        [stageCadastro, stagePre, matriculado].filter(
+          (s): s is string => !!s,
+        ),
+      );
+    return new Set([stagePre, matriculado].filter((s): s is string => !!s));
+  };
 
   let matriculas = await listarMatriculasParaConciliarReserva();
   if (apenasInscricao) {
@@ -126,11 +133,21 @@ export async function conciliarMatriculas(
       continue;
     }
 
+    // Prioridade: Matriculado > Pré-matrícula > Cadastro. O ramo "Matriculado" só
+    // ativa se a etapa estiver configurada (matriculado != undefined) E a matrícula
+    // estiver ativa no RM (SSTATUS.PLATIVO='S'); senão, comportamento anterior.
+    const matriculaAtiva = !!matriculado && mat.matriculaAtiva === true;
     const reservaPaga = mat.reservaStatusLan === 1;
-    const alvo: string = reservaPaga ? stagePre : stageCadastro;
-    const etapaEvento = reservaPaga
-      ? ("reserva-matricula-paga" as const)
-      : ("cadastro-matricula" as const);
+    const alvo: string = matriculaAtiva
+      ? matriculado!
+      : reservaPaga
+        ? stagePre
+        : stageCadastro;
+    const etapaEvento = matriculaAtiva
+      ? ("matricula-confirmada" as const)
+      : reservaPaga
+        ? ("reserva-matricula-paga" as const)
+        : ("cadastro-matricula" as const);
 
     const jaEmOuDepois =
       !!deal.dealStageId && posterioresA(alvo).has(deal.dealStageId);
@@ -141,7 +158,11 @@ export async function conciliarMatriculas(
     } else if (dryRun) {
       moveriam.push({
         numeroInscricao: mat.numeroInscricao,
-        etapa: reservaPaga ? "Pré-matrícula" : "Cadastro de matrícula",
+        etapa: matriculaAtiva
+          ? "Matriculado"
+          : reservaPaga
+            ? "Pré-matrícula"
+            : "Cadastro de matrícula",
       });
       continue;
     } else {
@@ -151,7 +172,8 @@ export async function conciliarMatriculas(
         continue;
       }
       stageEfetivo = alvo;
-      if (reservaPaga) base.movidasPre++;
+      if (matriculaAtiva) base.movidasMatriculado++;
+      else if (reservaPaga) base.movidasPre++;
       else base.movidasCadastro++;
 
       if (mat.emailResponsavel) {
@@ -171,6 +193,9 @@ export async function conciliarMatriculas(
             ...(reservaPaga && mat.reservaDataPagamento
               ? { cf_data_pagamento_reserva: mat.reservaDataPagamento }
               : {}),
+            ...(matriculaAtiva && mat.matriculaStatusDescricao
+              ? { cf_status_matricula: mat.matriculaStatusDescricao }
+              : {}),
           },
         });
       }
@@ -179,7 +204,9 @@ export async function conciliarMatriculas(
     // Valor da reserva (R$2.200) nas etapas de matrícula — inclusive já avançados.
     if (
       !dryRun &&
-      (stageEfetivo === stageCadastro || stageEfetivo === stagePre)
+      (stageEfetivo === stageCadastro ||
+        stageEfetivo === stagePre ||
+        (!!matriculado && stageEfetivo === matriculado))
     ) {
       const okValor = await ajustarValorReservaDeal(deal.id);
       if (okValor) base.valoresAjustados++;

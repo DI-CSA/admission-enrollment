@@ -139,4 +139,10 @@ também aparecem **no topo** do passo de documentos, exatamente nesta ordem:
 1. **Ficha médica flexível:** permanece condicionada à parametrização do RM e ao serviço PGE.
 2. **Alta disponibilidade:** sessão e rate limit ainda são locais ao processo; múltiplas instâncias exigem store compartilhado.
 3. **Observabilidade:** consolidar métricas dos jobs, falhas do RM e tempo entre matrícula, geração e pagamento da reserva.
-4. **Etapa Matriculado:** hoje é manual; uma automação futura depende de uma fonte autoritativa para contrato definitivamente assinado/validado.
+4. **Etapa Matriculado (automatizada):** o job `conciliar-matriculas` move o deal para
+   *Matriculado* quando a matrícula-por-período fica **ativa no RM** —
+   `SMATRICPL.CODSTATUS` atinge um status com `SSTATUS.PLATIVO='S'` ("Matrícula Ativa").
+   O contrato assinado **não** serve de sinal (a assinatura ocorre já no cadastro da
+   reserva, então todos os cadastrados o teriam). O 3º ramo só ativa com
+   `RD_CRM_DEAL_STAGE_MATRICULADO_ID` configurado — vazio, o job para em Pré-matrícula
+   (comportamento anterior). Forward-only e idempotente, como os demais ramos.

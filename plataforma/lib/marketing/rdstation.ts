@@ -40,7 +40,8 @@ export type EtapaFunil =
   | "boleto-gerado" // inscrição CONCLUÍDA (taxa gerada / checkout iniciado)
   | "pagamento-confirmado" // taxa de inscrição paga
   | "cadastro-matricula" // matrícula efetivada: boleto de reserva (R$2.200) GERADO
-  | "reserva-matricula-paga"; // boleto de reserva pago → pré-matrícula confirmada
+  | "reserva-matricula-paga" // boleto de reserva pago → pré-matrícula confirmada
+  | "matricula-confirmada"; // matrícula ATIVA no RM (SSTATUS.PLATIVO='S') → Matriculado
 
 export interface EventoFunil {
   etapa: EtapaFunil;

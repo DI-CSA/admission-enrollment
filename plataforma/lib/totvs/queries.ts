@@ -1046,8 +1046,16 @@ function dataParaIso(v: Date | string | null | undefined): string | null {
  * Matrícula do ciclo atual (candidato já matriculado: SPSINSCRICAOAREAOFERTADA.RAMAT
  * preenchido) com o estado do BOLETO DE RESERVA (título FLAN de ~R$2.200).
  * O job de conciliação usa isto para avançar a negociação no RD Station CRM:
- *   - reserva GERADA (STATUSLAN=0) → etapa "Cadastro de matrícula";
- *   - reserva PAGA   (STATUSLAN=1) → etapa "Pré-matrícula".
+ *   - reserva GERADA (STATUSLAN=0)          → etapa "Cadastro de matrícula";
+ *   - reserva PAGA   (STATUSLAN=1)          → etapa "Pré-matrícula";
+ *   - matrícula ATIVA (SSTATUS.PLATIVO='S') → etapa "Matriculado" (sinal final).
+ *
+ * O sinal do último movimento NÃO é o contrato assinado (SCONTRATO.ASSINADO='S' /
+ * SASSINATURACONTRATO): a assinatura ocorre no próprio cadastro de matrícula, então
+ * todos com RAMAT já a têm — não distingue "matriculado de verdade". O sinal
+ * autoritativo é a situação da matrícula-por-período: SMATRICPL.CODSTATUS cujo
+ * SSTATUS.PLATIVO='S' ("Matrícula Ativa"). SMATRICPL é ligada à inscrição por
+ * (CODCOLIGADA, IDPS, NUMEROINSCRICAO); SSTATUS por (CODCOLIGADA, CODSTATUS).
  */
 export interface MatriculaReservaConciliar {
   numeroInscricao: number;
@@ -1074,6 +1082,17 @@ export interface MatriculaReservaConciliar {
   respFinanceiro: ContatoRelacionado | null;
   /** Data/hora da efetivação da matrícula (SALUNO.RECCREATEDON), ISO. */
   dataCadastroMatricula: string | null;
+  /**
+   * Matrícula EFETIVAMENTE ATIVA no RM: a matrícula-por-período (SMATRICPL) desta
+   * inscrição está num status com SSTATUS.PLATIVO='S' (ex.: "Matrícula Ativa", cod. 1/17).
+   * É o SINAL AUTORITATIVO do último movimento no CRM (→ etapa "Matriculado").
+   * Falso enquanto em Pré-matrícula (cod. 6), Aguardando Pagamento (35), etc.
+   */
+  matriculaAtiva: boolean;
+  /** CODSTATUS da SMATRICPL desta inscrição (observabilidade). */
+  matriculaCodStatus: number | null;
+  /** Descrição do status (SSTATUS.DESCRICAO), p.ex. "Pré-matrícula" / "Matrícula Ativa". */
+  matriculaStatusDescricao: string | null;
 }
 
 /** Contato de um relacionado (pai/mãe/resp. financeiro) do candidato. */
@@ -1098,6 +1117,9 @@ interface MatriculaReservaRow {
   EMAILRESP: string | null;
   NOMERESP: string | null;
   CADASTRO_DT: string | null;
+  MAT_CODSTATUS: number | null;
+  MAT_STATUS_DESC: string | null;
+  MAT_PLATIVO: string | null;
   PAI_NOME: string | null;
   PAI_CPF: string | null;
   PAI_EMAIL: string | null;
@@ -1139,6 +1161,9 @@ SELECT i.NUMEROINSCRICAO, i.IDPS, i.CODCOLIGADA,
        resp.NOME AS NOMERESP,
        resp.EMAIL AS EMAILRESP,
        CONVERT(varchar(16), al.RECCREATEDON, 120) AS CADASTRO_DT,
+       mat.CODSTATUS AS MAT_CODSTATUS,
+       mat.DESCRICAO AS MAT_STATUS_DESC,
+       mat.PLATIVO AS MAT_PLATIVO,
        pai.NOME AS PAI_NOME, pai.CPF AS PAI_CPF, pai.EMAIL AS PAI_EMAIL, pai.TEL AS PAI_TEL,
        mae.NOME AS MAE_NOME, mae.CPF AS MAE_CPF, mae.EMAIL AS MAE_EMAIL, mae.TEL AS MAE_TEL,
        rf.NOME AS RESPFIN_NOME, rf.CPF AS RESPFIN_CPF, rf.EMAIL AS RESPFIN_EMAIL, rf.TEL AS RESPFIN_TEL
@@ -1146,6 +1171,19 @@ SELECT i.NUMEROINSCRICAO, i.IDPS, i.CODCOLIGADA,
   JOIN SPSPROCESSOSELETIVO ps ON ps.CODCOLIGADA = i.CODCOLIGADA AND ps.IDPS = i.IDPS
   JOIN SPSUSUARIO u ON u.CODUSUARIOPS = i.CODUSUARIOPS
   LEFT JOIN SALUNO al ON al.RA = i.RAMAT
+  OUTER APPLY (
+    -- Situação da MATRÍCULA-POR-PERÍODO (SMATRICPL) desta inscrição, com a descrição
+    -- e o flag PLATIVO do status (SSTATUS). PLATIVO='S' => matrícula efetivamente ativa
+    -- ("Matriculado"); 'N' => provisória (Pré-matrícula), aguardando pagamento, etc.
+    SELECT TOP 1 m.CODSTATUS, ss.DESCRICAO, ss.PLATIVO
+      FROM SMATRICPL m
+      LEFT JOIN SSTATUS ss
+        ON ss.CODCOLIGADA = m.CODCOLIGADA AND ss.CODSTATUS = m.CODSTATUS
+     WHERE m.CODCOLIGADA = i.CODCOLIGADA
+       AND m.IDPS = i.IDPS
+       AND m.NUMEROINSCRICAO = i.NUMEROINSCRICAO
+     ORDER BY m.IDPERLET DESC
+  ) mat
   OUTER APPLY (
     SELECT TOP 1 l.IDLAN, l.STATUSLAN, l.VALORORIGINAL, l.DATABAIXA
       FROM SPARCELA p
@@ -1207,6 +1245,9 @@ SELECT i.NUMEROINSCRICAO, i.IDPS, i.CODCOLIGADA,
     emailResponsavel: r.EMAILRESP?.trim() || null,
     nomeResponsavel: r.NOMERESP?.trim() || null,
     dataCadastroMatricula: r.CADASTRO_DT ? String(r.CADASTRO_DT).trim() : null,
+    matriculaAtiva: (r.MAT_PLATIVO?.trim().toUpperCase() ?? "") === "S",
+    matriculaCodStatus: r.MAT_CODSTATUS ?? null,
+    matriculaStatusDescricao: r.MAT_STATUS_DESC?.trim() || null,
     pai: montarContato(r.PAI_NOME, r.PAI_CPF, r.PAI_EMAIL, r.PAI_TEL),
     mae: montarContato(r.MAE_NOME, r.MAE_CPF, r.MAE_EMAIL, r.MAE_TEL),
     respFinanceiro: montarContato(
