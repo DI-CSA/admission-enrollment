@@ -328,6 +328,30 @@ fica.
 > **atualiza a ficha do contato no Marketing** (etapa, funil, valor, origem) automaticamente.
 > Não precisamos duplicar esforço.
 
+### Marketing × CRM: qual a diferença (e por que a visita aparece nos dois)
+
+Uma dúvida comum: *"a visita é um evento de Marketing ou uma negociação de CRM?"* **As duas
+coisas** — e não é repetição. É o mesmo fato visto de dois ângulos:
+
+| | **Marketing** | **CRM** |
+| --- | --- | --- |
+| O que guarda | A **linha do tempo** da pessoa: o que ela fez e quando | O **cartão** (negociação) que a equipe trabalha |
+| Para quê | **Medir e nutrir** — segmentar, ver de onde veio, onde parou | **Operar** — acompanhar, atribuir a alguém, dar o próximo passo |
+| Como se comporta | **Acumula tudo** (todos os eventos ficam registrados) | **Consolida** (um cartão por pessoa/jornada) |
+
+**Por que a visita também é uma negociação?** Porque marcar visita é o **começo de uma relação
+comercial**: tem algo a fazer (confirmar presença, agradecer, convidar a se inscrever). Isso é
+exatamente o papel de um **cartão no CRM**. Já o registro no Marketing é só a **marca de que a
+visita aconteceu**, usada para medição e para as comunicações.
+
+**Um exemplo do dia a dia:** quando quem visitou depois se inscreve, no **CRM** os dois viram
+**um cartão só** (§5.3) — para a equipe não trabalhar a mesma pessoa duas vezes. No
+**Marketing**, os dois registros continuam lá, porque o valor ali é enxergar o caminho inteiro
+da pessoa.
+
+> **Resumindo:** **Marketing = o que aconteceu** (para medir e nutrir). **CRM = o que há para
+> trabalhar** (para a equipe operar). A visita é as duas coisas ao mesmo tempo.
+
 ---
 
 ## 5. As negociações no CRM em detalhe (para a equipe de admissão)

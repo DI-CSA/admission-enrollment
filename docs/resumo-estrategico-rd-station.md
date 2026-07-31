@@ -71,7 +71,7 @@ flowchart LR
 ## 4. Os dois produtos do RD, e o que mais já está ligado
 
 - **RD Marketing (ativo):** contatos + eventos de funil (via API Key). Recebe a linha do
-  tempo e alimenta segmentações/automações.
+  tempo e alimenta as segmentações (trabalhadas manualmente pela equipe do parceiro).
 - **RD CRM (ativo):** pipeline de admissão com **negociações (deals)** criadas na inscrição
   e movidas automaticamente pelas conciliações do RM (taxa paga, reserva gerada, reserva
   paga). Usa **campos personalizados** e produtos (valor da taxa/reserva). A visita vira um
@@ -84,13 +84,19 @@ flowchart LR
 ```mermaid
 flowchart LR
     subgraph MKT[RD Marketing — ativo]
-        N[Nutrição / automações] --> O[Funil de contato]
+        N[Nutrição manual / segmentações] --> O[Funil de contato]
     end
     subgraph CRM[RD CRM — ativo]
         P[Pipeline de admissão] --> Q[Deals · origens · valor]
     end
     O -.->|oportunidade vira negociação| P
 ```
+
+**Marketing × CRM em uma linha.** O mesmo fato pode aparecer nos dois sem ser duplicidade: o
+**Marketing registra o que aconteceu** (a linha do tempo do contato — para *medir e nutrir*); o
+**CRM registra o que há para trabalhar** (a negociação — para a equipe *operar*). Por isso a
+visita é evento **e** deal: um fato a medir e uma negociação a trabalhar. Diferença prática — o
+Marketing **acumula** todos os eventos; o CRM **consolida** num só deal por jornada.
 
 ---
 

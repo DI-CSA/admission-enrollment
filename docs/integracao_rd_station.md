@@ -77,6 +77,37 @@ Ambos são **complementares e já estão ativos**. O Marketing recebe o **contat
 (dedup por e-mail); o CRM recebe a **negociação** (deal) para a equipe de admissão trabalhar
 o pipeline.
 
+### Marketing × CRM — a separação conceitual (medir × operar)
+
+É comum confundir os dois porque **o mesmo fato aparece nos dois** — uma visita, por exemplo,
+gera **um evento** no Marketing **e** **um deal** no CRM. Não é duplicidade: são duas
+*representações* do mesmo momento, com finalidades distintas.
+
+| | **RD Marketing** (`rdstation.ts`) | **RD CRM** (`rdcrm.ts`) |
+| --- | --- | --- |
+| Unidade de dado | **Evento/conversão** sobre um **contato** (chave = e-mail) | **Negociação (deal)** dentro de um **funil/pipeline** |
+| Natureza | Registro **passivo**: "isto aconteceu no instante T" | Objeto de **trabalho**: um cartão que a equipe move e sobre o qual age |
+| Responde | *Onde a pessoa está? Onde parou? Que origem/campanha trouxe?* | *O que fazer a seguir? Quem é o responsável? Quanto vale o pipeline?* |
+| Finalidade | **Medir e nutrir** (segmentação, atribuição, abandono) | **Operar** o pipeline de admissão |
+| Histórico | **Acumula** todos os eventos (timeline append-only) | **Consolida**: um deal por jornada |
+
+**Por que a visita entra no CRM sem ferir "CRM = só deals".** Comercialmente, a visita é o
+**início de uma negociação**: alguém entrou no funil e há algo a trabalhar (confirmar
+comparecimento, convidar a se inscrever). Por isso ela é modelada **como um deal** no topo do
+pipeline (`criarNegociacaoVisita`, §6.2), e não como um "evento avulso" — o princípio de que
+*tudo no CRM é deal* continua válido. O evento de Marketing homônimo
+(`visita-agendada`/`visita-realizada`) é outra coisa: o **fato registrado** na timeline do
+contato, para medição/atribuição — algo que se *mede*, não que se *trabalha*.
+
+**O detalhe que fecha o conceito (acumular × consolidar).** Quando a mesma pessoa se inscreve,
+no **CRM** o deal de visita e a inscrição viram **um só cartão** (§6.3) — a equipe não fica com
+duas negociações. No **Marketing**, os dois eventos (`visita-agendada` *e* `boleto-gerado`)
+**permanecem** na timeline, porque ali o valor é justamente ver o percurso completo.
+
+> **Em uma frase:** o Marketing registra **o que aconteceu** (para medir e nutrir); o CRM
+> registra **o que há para trabalhar** (para operar). A visita é as duas coisas ao mesmo tempo,
+> sem contradição.
+
 ### Filosofia comum das duas camadas (`lib/marketing/`)
 
 - **Sempre server-side** — o token nunca vai ao browser.
