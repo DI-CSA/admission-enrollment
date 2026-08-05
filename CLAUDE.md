@@ -97,6 +97,9 @@ em [docs/tech-info.md](docs/tech-info.md).
 - [estrategia-marketing-google-rd-station.md](docs/estrategia-marketing-google-rd-station.md) — estratégia de captação/marketing/CRM (Google + RD, nível ouro).
 - [plano-matricula-online-candidatos-aprovados.md](docs/plano-matricula-online-candidatos-aprovados.md) — plano do módulo de matrícula.
 - [agendador-visitas.md](docs/agendador-visitas.md) — agendador de visitas (store Postgres próprio + funil de marketing).
+- [atendimento-whatsapp-chatwoot-flowise.md](docs/atendimento-whatsapp-chatwoot-flowise.md) — padrão ouro do canal de atendimento WhatsApp (Chatwoot CE + Flowise): alertas de espera, agilidade/qualidade, CE×Enterprise, CRM e checklist.
+- [resumo-atendimento-whatsapp-nao-tecnico.md](docs/resumo-atendimento-whatsapp-nao-tecnico.md) — resumo do canal de atendimento WhatsApp **sem código** (para a direção), com benefícios, custo, quick wins pré-lançamento e glossário.
+- [relatorio-atendimento-whatsapp-2027.md](docs/relatorio-atendimento-whatsapp-2027.md) — relatório objetivo para **direção + responsável pelo atendimento**: o que está implementado, como usar no dia a dia, e as automações separadas como **projeto futuro**.
 - [guia_hotsite_csa_leblon_2027.md](docs/guia_hotsite_csa_leblon_2027.md) — guia visual/conteúdo do hotsite.
 - [guia_customizacao_portal_processo_seletivo_totvs.md](docs/guia_customizacao_portal_processo_seletivo_totvs.md) — customização oficial TOTVS (FrameHTML).
 - [testes-homolog.md](docs/testes-homolog.md) — contas/CPFs de teste ⚠️ contém dados sensíveis.
