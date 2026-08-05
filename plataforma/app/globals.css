@@ -17,6 +17,11 @@
   --color-grafite: #14202e;
   --color-cinza-suave: #5b6b7d;
 
+  /* Verde oficial da marca WhatsApp — usado só no botão flutuante de atendimento
+     (canal exclusivo do PS 2027). Fora da paleta CSA de propósito. */
+  --color-whatsapp: #25d366;
+  --color-whatsapp-escuro: #1ebe5d;
+
   --font-sans: var(--font-inter);
   --font-display: var(--font-outfit);
 
