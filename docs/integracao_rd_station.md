@@ -6,7 +6,8 @@
 > RD** e uma **análise de boas práticas de marketing/CRM com sugestões de evolução**.
 > Escrito para o time técnico e para o parceiro que opera o RD Station.
 
-- **Última atualização:** 2026-07-30 (revisão completa contra o código-fonte)
+- **Última atualização:** 2026-08-03 (revisão completa contra o código-fonte; inclui a
+  automação da etapa *Matriculado* — §8.2 — e a dependência do contrato via DocuSign)
 - **Produtos-alvo:** RD Station **Marketing** (contatos + eventos de funil) e RD Station
   **CRM** (negociações/deals do pipeline de admissão)
 - **Integrações correlatas:** Meta (Pixel + CAPI) — ver [integracao_meta.md](integracao_meta.md);
@@ -16,10 +17,11 @@
 
 | Frente | Situação | Observação |
 | --- | --- | --- |
-| **Marketing — eventos de funil (API Key)** | ✅ **Ativo** | 8 eventos emitidos de fato (ver §4) |
+| **Marketing — eventos de funil (API Key)** | ✅ **Ativo** | 10 eventos emitidos de fato — 11 com *Matriculado* configurado (ver §4) |
 | **CRM — negociação da inscrição (deal)** | ✅ **Ativo** | criada no `boleto-gerado`, com **campos personalizados** (UUID) |
 | **CRM — conciliação de pagamento da taxa** | ✅ **Ativo** | cron 2×/dia move o deal p/ *Taxa paga* e dispara `pagamento-confirmado` |
 | **CRM — funil de pré-matrícula (reserva R$2.200)** | ✅ **Ativo** | cron horário move p/ *Cadastro de matrícula* / *Pré-matrícula* |
+| **CRM — etapa *Matriculado* (matrícula ativa no RM)** | ⚙️ **Pronto — aguarda config** | 3º ramo do mesmo cron: `SSTATUS.PLATIVO='S'` → *Matriculado* + evento `matricula-confirmada`. Ativa ao mapear `RD_CRM_DEAL_STAGE_MATRICULADO_ID`; sem ela, no-op (§8.2) |
 | **Agendador de visitas → Marketing + CRM** | ✅ **Ativo** | evento `visita-agendada` + deal de visita + **deal único** (visita→inscrição) |
 | **Meta CAPI (visita)** | ✅ **Ativo** | evento `Schedule` sob consentimento |
 | **Google Ads — conversão "Inscrição Concluída"** | ✅ **Ativo** | client-side (gtag), sob consentimento de marketing |
@@ -201,6 +203,7 @@ disponíveis, e a **atribuição de origem** (`client_tracking_id` + UTMs) quand
 | `pagamento-confirmado` | Cron `conciliar-pagamentos` (taxa paga no RM) | Cliente | `idps`; `cf_numero_inscricao`, `cf_nome_candidato`, `cf_data_pagamento_taxa`. **Sem UTM/telefone** (cron, sem `req`) |
 | `cadastro-matricula` | Cron `conciliar-matriculas` (reserva **gerada**) | Cliente | `idps`; `cf_numero_inscricao`, `cf_nome_candidato`, `cf_valor_reserva` |
 | `reserva-matricula-paga` | Cron `conciliar-matriculas` (reserva **paga**) | Cliente | `idps`; `cf_numero_inscricao`, `cf_nome_candidato`, `cf_valor_reserva`, `cf_data_pagamento_reserva` |
+| `matricula-confirmada` | Cron `conciliar-matriculas` (**matrícula ativa** no RM, `SSTATUS.PLATIVO='S'`) | Cliente | `idps`; `cf_numero_inscricao`, `cf_nome_candidato`, `cf_valor_reserva`, `cf_status_matricula`. **Só quando a etapa *Matriculado* está configurada** (`RD_CRM_DEAL_STAGE_MATRICULADO_ID`) |
 
 **Campos ricos do `boleto-gerado`** (evento de maior valor): `cf_numero_inscricao`,
 `cf_valor_taxa`, `cf_nome_candidato`, `cf_processo_seletivo`, `cf_course_of_interest`
@@ -235,9 +238,14 @@ flowchart LR
     B -->|Cliente| P[pagamento-confirmado]
     P --> CM[cadastro-matricula]
     CM --> RM[reserva-matricula-paga]
+    RM -->|matrícula ativa no RM| MT[matricula-confirmada]
     INI -.->|abandono medido por segmento| AE
     B -.->|gerou e não pagou = recuperável| P
 ```
+
+> **`matricula-confirmada` é condicional.** O último evento/etapa só dispara quando a etapa
+> *Matriculado* está mapeada em `RD_CRM_DEAL_STAGE_MATRICULADO_ID` (§8.2). Sem a config, o
+> pipeline para em *Pré-matrícula* (comportamento anterior).
 
 ---
 
@@ -336,16 +344,21 @@ pelo código.
 **Resumo operacional.** No RD, **NÃO** altere manualmente:
 
 - **etapa do deal** nas fases automáticas (*Inscrito → Taxa paga → Cadastro de matrícula →
-  Pré-matrícula*; *Visita agendada → Visita realizada*) — o cron sobrescreve/avança;
+  Pré-matrícula*; *Visita agendada → Visita realizada*; e **também *Matriculado*** quando a
+  etapa está configurada — §8.2) — o cron sobrescreve/avança;
 - **valor e produtos** do deal (taxa / reserva R$2.200);
 - **`deal_source` / `traffic_source`** (origem);
 - **campos personalizados alimentados pela automação** (§5.2) e os **`cf_plug_*`** do contato
   (§5.3).
 
-No RD, **FAÇA** manualmente: marcar **`Matriculado`** (etapa final, não automatizada),
-**temperatura (`rating`)**, **motivos de perda** (lost reasons), **qualificação** (classificada
-à mão — §10.4), anotações/tarefas/atividades, e as **comunicações de nutrição (disparadas
-manualmente pela equipe), segmentações e relatórios**.
+No RD, **FAÇA** manualmente: **temperatura (`rating`)**, **motivos de perda** (lost reasons),
+**qualificação** (classificada à mão — §10.4), anotações/tarefas/atividades, e as
+**comunicações de nutrição (disparadas manualmente pela equipe), segmentações e relatórios**.
+
+> **`Matriculado` deixou de ser manual** (2026-07-31). Antes, marcar a etapa final era a
+> única transição feita à mão; agora o cron a move sozinho quando a matrícula fica ativa no RM
+> (§8.2) — **desde que** `RD_CRM_DEAL_STAGE_MATRICULADO_ID` esteja mapeada. Enquanto a etapa
+> não estiver configurada, ela continua sendo marcada manualmente.
 
 ---
 
@@ -455,11 +468,32 @@ matrícula, `POST /api/matricula` dispara a conciliação **só daquela inscriç
 de matrícula (R$2.200)**:
 
 - reserva **gerada** (`STATUSLAN=0`) → *Cadastro de matrícula* (evento `cadastro-matricula`);
-- reserva **paga** (`STATUSLAN=1`) → *Pré-matrícula* (evento `reserva-matricula-paga`).
+- reserva **paga** (`STATUSLAN=1`) → *Pré-matrícula* (evento `reserva-matricula-paga`);
+- **matrícula ativa no RM** (`SSTATUS.PLATIVO='S'`) → *Matriculado* (evento
+  `matricula-confirmada`) — **3º ramo, novo**.
 
-Em ambas: ajusta o **valor** do deal para a reserva (troca o produto "Taxa de inscrição"
+Em todas: ajusta o **valor** do deal para a reserva (troca o produto "Taxa de inscrição"
 pelo "Reserva de matrícula" R$2.200) e grava os **campos personalizados** de enriquecimento
-(pai/mãe/resp. financeiro + datas). A etapa *Matriculado* é sinalizada **manualmente**.
+(pai/mãe/resp. financeiro + datas).
+
+**Etapa *Matriculado* (automação, novo em 2026-07-31).** O 3º ramo move o deal para
+*Matriculado* quando a **matrícula-por-período fica ativa no RM** — `SMATRICPL.CODSTATUS`
+atinge um status com `SSTATUS.PLATIVO='S'` ("Matrícula Ativa"), exposto pela query como
+`matriculaAtiva`. Detalhes:
+
+- **Prioridade** *Matriculado > Pré-matrícula > Cadastro*: se a matrícula está ativa, esse
+  alvo vence os demais (a decisão continua *forward-only* — nunca regride de etapa).
+- **A matrícula efetiva depende também da assinatura do contrato**, feita pela plataforma
+  **DocuSign** (assinatura eletrônica), além do pagamento da reserva. Hoje a **integração
+  desse processo de assinatura com o sistema ainda está em desenvolvimento**, então a
+  confirmação da assinatura **não entra sozinha** no fluxo. Por isso o sinal que o código usa
+  hoje é o **status ativo no RM** (`SSTATUS.PLATIVO='S'`) — que a secretaria só ativa com o
+  contrato assinado e a reserva em ordem. Quando a integração DocuSign estiver pronta, a
+  assinatura poderá alimentar a automação diretamente.
+- Enriquece o campo personalizado **`cf_status_matricula`** (descrição do status do RM).
+- **Gate de configuração:** só ativa com `RD_CRM_DEAL_STAGE_MATRICULADO_ID` preenchida.
+  Vazia (situação atual em homolog/prod), o ramo é **no-op** e o job para em *Pré-matrícula*
+  (comportamento anterior preservado) — a marcação de *Matriculado* segue manual até o mapeamento.
 
 > O 1º ano do Fundamental não passa por *Prova/Entrevista*. Como a automação é dirigida por
 > **pagamento**, esse "pulo" acontece sozinho (o deal nunca entra em Prova/Entrevista).
@@ -692,7 +726,9 @@ atividades/tarefas.
    `cf_numero_inscricao`, `cf_valor_taxa`, `cf_nome_candidato`, `cf_processo_seletivo`,
    `cf_course_of_interest`, `cf_relacao_responsavel`, `cf_responsavel_financeiro_distinto`,
    `cf_nome/email/telefone_responsavel_financeiro`, `cf_data_visita`, `cf_local_visita`,
-   `cf_valor_reserva`, `cf_data_pagamento_taxa`, `cf_data_pagamento_reserva`.
+   `cf_valor_reserva`, `cf_data_pagamento_taxa`, `cf_data_pagamento_reserva`,
+   `cf_status_matricula` (descrição do status da matrícula ativa no RM — enviado no
+   `matricula-confirmada`).
 4. **Funil de contato (lifecycle):** associar os `conversion_identifier`
    (`inscricao-2027-<etapa>`) aos estágios Lead → Cliente (tabela §4).
 
@@ -704,6 +740,10 @@ atividades/tarefas.
    Visita realizada → Inscrito → Taxa paga → Prova/Entrevista → Cadastro de matrícula →
    Pré-matrícula → Matriculado*. Pegar os IDs (`GET /deal_stages`) e preencher os
    `RD_CRM_DEAL_STAGE_*`.
+   > **Ativa a automação de *Matriculado*.** Preencher `RD_CRM_DEAL_STAGE_MATRICULADO_ID`
+   > liga o 3º ramo do cron (§8.2): o deal passa a avançar sozinho para *Matriculado* quando a
+   > matrícula fica ativa no RM. Deixar vazio mantém o comportamento anterior (para em
+   > *Pré-matrícula*; *Matriculado* marcado à mão).
 7. **Campos personalizados de negociação** (§5.2): criar cada um e colar o **UUID** na env
    correspondente (`RD_CRM_CF_*`).
 8. **Produto "Reserva de matrícula"** (R$2.200) → `RD_CRM_PRODUCT_RESERVA_ID`.

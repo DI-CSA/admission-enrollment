@@ -5,7 +5,9 @@
 > Versão executiva do documento técnico [integracao_rd_station.md](integracao_rd_station.md).
 > Foco: **o que já fazemos hoje**, **o que isso já entrega de valor** e **o que decidir em
 > conjunto** com o parceiro para refinar captação, nutrição e conversão.
-> Atualizado em **2026-07-30** (auditado contra o código em produção).
+> Atualizado em **2026-08-03** (auditado contra o código em produção; inclui a automação da
+> etapa *Matriculado*, os eventos `visita-realizada`/`area-escolhida`, `CompleteRegistration`
+> no Meta e a dependência do contrato via DocuSign).
 
 ---
 
@@ -41,30 +43,37 @@ nutrir todo o percurso** — não só "quem se inscreveu", mas **onde cada pesso
 
 ```mermaid
 flowchart LR
-    V[visita-agendada] -->|Lead| L[login-responsavel]
+    V[visita-agendada] -->|Lead Qualif.| VR[visita-realizada]
+    V -->|Lead| L[login-responsavel]
     L -->|Lead| C[cadastro-novo-responsavel]
     C -->|Lead Qualif.| I[inscricao-iniciada]
-    I -->|Oportunidade| B[boleto-gerado]
+    I -->|Lead Qualif.| AE[area-escolhida]
+    AE -->|Oportunidade| B[boleto-gerado]
     B -->|Cliente| P[pagamento-confirmado]
     P --> CM[cadastro-matricula]
     CM --> RM[reserva-matricula-paga]
+    RM -->|matrícula ativa no RM| MT[matricula-confirmada]
     B -.->|gerou taxa e não pagou = recuperável| P
 ```
 
 | Evento | Momento | Ciclo de vida |
 | --- | --- | --- |
 | `visita-agendada` | Visita marcada no agendador | Lead |
+| `visita-realizada` | Presença confirmada na visita (chamada) | Lead Qualificado |
 | `login-responsavel` | Responsável já cadastrado faz login | Lead |
 | `cadastro-novo-responsavel` | Novo responsável na 1ª inscrição | Lead |
 | `inscricao-iniciada` | Começou a incluir um candidato | Lead Qualificado |
+| `area-escolhida` | Escolheu a área/segmento no wizard | Lead Qualificado |
 | `boleto-gerado` | Taxa gerada (inscrição concluída) | Oportunidade |
 | `pagamento-confirmado` | Taxa paga (conciliado do RM) | Cliente |
 | `cadastro-matricula` | Matrícula efetivada / reserva gerada | Cliente |
 | `reserva-matricula-paga` | Reserva de R$ 2.200 paga | Cliente |
+| `matricula-confirmada` | Matrícula **ativa** no RM → etapa *Matriculado* (quando configurada) | Cliente |
 
-> **Importante:** hoje **não há captura de lead anônimo** (formulário de interesse) nem
-> medição de abandono **dentro** do wizard. Todo contato só entra quando já tem e-mail. Isso
-> é a principal oportunidade de evolução (§6).
+> **Importante:** já medimos abandono **dentro** do wizard — `inscricao-iniciada` e
+> `area-escolhida` mostram até onde a pessoa avançou antes de gerar o boleto. O que ainda
+> **não** temos é **captura de lead anônimo** (formulário de interesse sem e-mail): todo
+> contato só entra no RD quando já tem e-mail. Essa é a principal oportunidade de evolução (§6).
 
 ---
 
@@ -75,8 +84,10 @@ flowchart LR
 - **RD CRM (ativo):** pipeline de admissão com **negociações (deals)** criadas na inscrição
   e movidas automaticamente pelas conciliações do RM (taxa paga, reserva gerada, reserva
   paga). Usa **campos personalizados** e produtos (valor da taxa/reserva). A visita vira um
-  deal e, quando a pessoa se inscreve, **os dois viram um só deal** (jornada consolidada).
-- **Meta (Pixel + CAPI, ativo):** evento `Schedule` na visita, sob consentimento.
+  deal e, quando a pessoa se inscreve, **os dois viram um só deal** (jornada consolidada) —
+  quando a consolidação está habilitada na configuração do sistema.
+- **Meta (Pixel + CAPI, ativo):** `Schedule` na visita e `CompleteRegistration` na inscrição
+  concluída e na matrícula, sob consentimento.
 - **Google Ads (ativo):** conversão **"Inscrição Concluída"** no navegador, sob
   consentimento. Já capturamos `gclid` para futura importação de conversões offline
   (matrícula).
@@ -117,9 +128,21 @@ Cadastro de matrícula → Pré-matrícula → Matriculado
 ```
 
 *Cadastro de matrícula* = matrícula efetivada + boleto de reserva gerado. *Pré-matrícula* =
-reserva de **R$ 2.200** paga. A aplicação concilia essas etapas pelo **estado financeiro
-real do RM** e ajusta o valor do deal para o produto "Reserva de matrícula". Todo disparo é
+reserva de **R$ 2.200** paga. *Matriculado* = **matrícula ativa no RM** (status oficial). A
+aplicação concilia essas etapas pelo **estado real do RM** (financeiro e de matrícula) e
+ajusta o valor do deal para o produto "Reserva de matrícula". Todo disparo é
 **não-bloqueante**: falha do RD nunca interrompe a inscrição do candidato.
+
+> **Nota sobre *Matriculado*:** a matrícula efetiva não depende só do pagamento da reserva —
+> exige também a **assinatura do contrato**, feita pela plataforma **DocuSign** (assinatura
+> eletrônica). A **integração desse processo de assinatura com o sistema ainda está em
+> desenvolvimento**; por isso o sinal que hoje move o deal para *Matriculado* é o **status
+> oficial da matrícula no RM** (que a secretaria só ativa após contrato + reserva em ordem).
+
+> **Novidade (2026-07-31):** *Matriculado* deixou de ser marcada só à mão — o sistema move o
+> deal para lá automaticamente quando a matrícula fica **ativa no RM**. Basta mapear a etapa
+> na configuração (`RD_CRM_DEAL_STAGE_MATRICULADO_ID`); enquanto não for mapeada, o pipeline
+> para em *Pré-matrícula* e a marcação segue manual.
 
 ---
 
@@ -144,6 +167,10 @@ a ação do parceiro no RD, quando indicada:
   convite a se inscrever.)*
 - **Retry/backoff nos eventos de Marketing** — se um envio falhar por instabilidade de rede, o
   sistema **reenvia automaticamente**. *(Concluído.)*
+- **Etapa *Matriculado* automatizada** — o deal avança sozinho para *Matriculado* quando a
+  matrícula fica **ativa no sistema oficial (RM)**, com o evento `matricula-confirmada`. Antes,
+  era a única etapa marcada à mão. *(Pronto; ativa ao mapear a etapa na config — enquanto isso,
+  o pipeline para em Pré-matrícula.)*
 
 > ⚠️ **Automático × manual — evitar intervenções equivocadas.** Boa parte das **transições de
 > etapa no CRM** e da **classificação de funil no Marketing** é feita **automaticamente pelo

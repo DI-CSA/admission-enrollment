@@ -22,6 +22,9 @@ humano** — com uma **rede de segurança** que garante que ninguém fique sem r
    - **No horário** (seg–sex, 8h–17h): avisa que **um atendente responderá em breve**.
    - **Fora do horário**: avisa que a mensagem **ficou registrada** e será respondida assim que
      possível.
+   - Da **2ª mensagem em diante**, o assistente **não repete as boas-vindas**: manda só uma
+     confirmação curta ("recebemos sua mensagem"), também **adaptada ao horário** — para não
+     parecer robô repetitivo.
 3. A conversa entra na **central de atendimento** da equipe, que responde de forma organizada
    (com respostas prontas, histórico da família, etc.).
 4. **Rede de segurança:** se, dentro do horário, ninguém responder em **5 minutos**, o sistema
@@ -31,10 +34,13 @@ humano** — com uma **rede de segurança** que garante que ninguém fique sem r
 
 - ✅ Assistente automático com **mensagem de boas-vindas que muda conforme o horário**.
 - ✅ **Rede de segurança de 5 minutos** instalada e **em produção**.
-- ✅ Central de atendimento (Chatwoot) funcionando, com o relógio do servidor ajustado para
+- ✅ Central de atendimento (Chatwoot) funcionando, com todas as mensagens e regras no
   **horário de Brasília**.
 - ✅ **18 respostas prontas** baseadas nos editais, aprovadas pela direção.
 - ✅ **Atendimento definido:** conversas atribuídas à **Renata Azevedo** (time `admissões-crm`).
+- ✅ **Retomada após 24h ligada:** os modelos exigidos pela Meta já estão **aprovados** e o
+  sistema **reengaja automaticamente** quem escreveu fora da janela (ex.: mensagem de sexta
+  respondida na segunda) — ver seção 8.
 
 ### Ativar os avisos de novas conversas (fazer uma vez, por atendente)
 
@@ -86,11 +92,11 @@ existente e ao envio de mensagens pelo WhatsApp (regras da Meta).
 | ✅ **Equipe definida** — atendimento atribuído à Renata Azevedo (time `admissões-crm`) | baixo | alto — conversa sempre chega a alguém | Direção/TI (feito) |
 | ✅ **Horário oficial confirmado** — seg–sex 8h–17h | mínimo | — | Direção (feito) |
 | ✅ **Aviso de chegada** disponível — cada atendente liga as notificações (e-mail + navegador) no próprio perfil, uma vez (ver seção "Ativar os avisos de novas conversas") | mínimo | alto — atende a tempo | Atendente |
-| **Templates de retomada na Meta** (para responder após 24h) | textos **aprovados pela direção**; **aguardando aprovação da Meta** | alto — poder responder segunda uma mensagem de sexta | TI + Marketing |
+| ✅ **Templates de retomada na Meta** (para responder após 24h) — **aprovados pela Meta** e reengajamento automático **ligado** | baixo | alto — poder responder segunda uma mensagem de sexta | TI + Marketing (feito) |
 | **Teste de ponta a ponta** antes do anúncio | baixo | alto — confiança no lançamento | TI |
 
-> A maioria é de **baixo esforço** e pode ficar pronta rapidamente. O único item com prazo
-> externo é a **aprovação dos templates pela Meta** — por isso deve **começar imediatamente**.
+> Praticamente tudo já está pronto. O único item em aberto é o **teste de ponta a ponta**
+> antes do anúncio.
 
 ## 7. Evoluções depois do lançamento (opcionais)
 
@@ -102,8 +108,13 @@ existente e ao envio de mensagens pelo WhatsApp (regras da Meta).
 
 ## 8. Cuidados
 
-- **Regra das 24h do WhatsApp:** fora de 24h desde a última mensagem da família, só é possível
-  enviar **mensagens de modelo aprovado** pela Meta (por isso os templates de retomada).
+- **Regra das 24h do WhatsApp (limitação da Meta, não da escola):** passadas 24h desde a última
+  mensagem da família, a **Meta bloqueia** texto livre no WhatsApp — só permite **mensagens de
+  modelo previamente aprovadas por ela** (os "templates"). Isso é uma **regra da plataforma da
+  Meta**, igual para qualquer empresa; não é escolha nem falha do nosso sistema. Como já temos
+  os **modelos aprovados**, o sistema **retoma o contato automaticamente** dentro dessa regra:
+  quem escreveu fora da janela (ex.: no fim de semana) recebe uma mensagem de modelo convidando
+  a continuar o atendimento, e a conversa volta ao normal quando a família responde.
 - **Privacidade (LGPD):** dados das famílias são tratados com cuidado; informações sensíveis
   não são expostas antes da identificação.
 - **Sem excesso de mensagens:** o assistente é enxuto (uma mensagem por situação), para não

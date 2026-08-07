@@ -12,7 +12,11 @@
 > uma versão executiva/estratégica ([resumo-estrategico-rd-station.md](resumo-estrategico-rd-station.md)).
 > Este aqui é o **guia detalhado, em linguagem simples**.
 >
-> **Atualizado em:** 2026-07-30.
+> **Atualizado em:** 2026-08-03. *(Novidade: a etapa final **Matriculado** passou a ser
+> preenchida automaticamente pelo sistema — antes era a única marcada à mão. Ver Passo 11 e §6.
+> Esta revisão também registra que a matrícula efetiva depende da **assinatura do contrato via
+> DocuSign** — integração em desenvolvimento — e acerta a taxa de inscrição, a contagem de
+> eventos e o alcance do Meta.)*
 
 ---
 
@@ -246,7 +250,8 @@ fica.
 - **Ciclo de vida:** Lead Qualificado.
 
 ### Passo 7 — Conclui a inscrição (boleto da taxa gerado)
-- **A pessoa faz:** finaliza a inscrição; o sistema gera o **boleto da taxa** (R$ 200).
+- **A pessoa faz:** finaliza a inscrição; o sistema gera o **boleto da taxa de inscrição**
+  (o valor é definido pelo processo seletivo/série — não é fixo).
 - **O sistema registra:** evento **"boleto gerado"** — o evento **mais rico** de todos (leva
   número da inscrição, valor da taxa, nome do candidato, processo seletivo, relação do
   responsável e, se houver, dados do responsável financeiro). Ao mesmo tempo, **cria a
@@ -278,8 +283,25 @@ fica.
 - **A pessoa faz:** paga o boleto de reserva (R$ 2.200).
 - **O sistema registra:** o processo automático **move a negociação** para *Pré-matrícula* e
   dispara o evento **"reserva de matrícula paga"**.
-- **Ciclo de vida:** Cliente. A etapa final, *Matriculado*, é marcada **manualmente** pela
-  equipe.
+- **Ciclo de vida:** Cliente.
+
+### Passo 11 — Matrícula ativa (Matriculado) — *novo, automatizado*
+- **O que acontece:** quando a matrícula do candidato fica **ativa no sistema oficial (RM)** —
+  o status oficial da matrícula do aluno —, o processo automático **move a negociação** para a
+  etapa final *Matriculado* e dispara o evento **"matrícula confirmada"**.
+- **A matrícula não depende só do pagamento da reserva.** Para o aluno estar de fato
+  *matriculado* é preciso **pagar a reserva de matrícula (R$ 2.200) e também assinar o
+  contrato**, feito pela plataforma **DocuSign** (assinatura eletrônica). Hoje a **integração
+  desse processo de assinatura com o nosso sistema ainda está em desenvolvimento** — por isso a
+  confirmação da assinatura ainda não entra sozinha no fluxo. O sinal que o sistema usa hoje
+  para mover o cartão para *Matriculado* é o **status oficial da matrícula no RM**, que reflete
+  o processo completo da secretaria.
+- **Antes era manual.** Até 2026-07-31, marcar *Matriculado* era a única transição feita à
+  mão. Agora o sistema faz sozinho, pelo fato real (status no RM).
+- **Depende de um ajuste de configuração:** a escola/parceiro precisa **apontar qual é a coluna
+  *Matriculado*** na configuração. Enquanto isso não for feito, o cartão para em *Pré-matrícula*
+  e *Matriculado* continua sendo marcado à mão (nada quebra).
+- **Ciclo de vida:** Cliente.
 
 > **Onde as pessoas param importa tanto quanto onde chegam.** Cada passo acima é uma
 > oportunidade de **recuperação**: quem gerou boleto e não pagou, quem visitou e não se
@@ -301,6 +323,7 @@ fica.
 | Pagou a taxa | pagamento confirmado | **Cliente** | nº inscrição, candidato, data do pagamento |
 | Matrícula (reserva gerada) | cadastro de matrícula | Cliente | nº inscrição, candidato, valor da reserva |
 | Reserva paga | reserva de matrícula paga | Cliente | nº inscrição, candidato, valor e data da reserva |
+| Matrícula ativa no RM | matrícula confirmada | Cliente | nº inscrição, candidato, status da matrícula (move para *Matriculado*, quando configurado) |
 
 > **O que ainda não capturamos: lead anônimo.** Hoje um contato só entra quando **já tem
 > e-mail** (visita, login, cadastro ou inscrição). Não existe ainda um formulário de interesse
@@ -318,8 +341,9 @@ fica.
 - **RD Station CRM** *(ativo)* — o **pipeline de admissão**, onde a equipe acompanha cada
   candidato individualmente como uma **negociação**. Recebe automaticamente as movimentações
   de etapa conforme os pagamentos acontecem.
-- **Meta (Pixel + CAPI)** *(ativo)* — recebe o evento de **visita agendada** (*Schedule*),
-  **sob consentimento**, para otimizar e medir campanhas no Facebook/Instagram.
+- **Meta (Pixel + CAPI)** *(ativo)* — recebe o evento de **visita agendada** (*Schedule*) e o
+  de **inscrição e matrícula concluídas** (*CompleteRegistration*), **sob consentimento**, para
+  otimizar e medir campanhas no Facebook/Instagram.
 - **Google Ads** *(ativo)* — recebe a conversão **"Inscrição Concluída"**, **sob
   consentimento**. Já guardamos o **gclid** (código do clique do anúncio) para, no futuro,
   enviar a **conversão offline** de matrícula.
@@ -398,7 +422,8 @@ gerar relatórios. Os campos usados hoje:
 Se uma pessoa **agendou visita** e depois **se inscreveu**, o sistema reaproveita o **cartão
 da visita** e o transforma no cartão da inscrição, em vez de criar um segundo. Assim a
 jornada **visita → inscrição vira um único cartão** no pipeline — evitando cartões duplicados
-da mesma pessoa (um problema clássico de organização de CRM).
+da mesma pessoa (um problema clássico de organização de CRM). *(Esse "cartão único" funciona
+quando a opção está habilitada na configuração do sistema.)*
 
 ### 5.4 As etapas do pipeline de admissão
 
@@ -426,7 +451,12 @@ avançam** as negociações:
 2. **Confere matrículas/reservas** — roda **de hora em hora** (e também é **acionado na hora**
    em que alguém efetiva a matrícula, para não esperar). Move para *Cadastro de matrícula* ou
    *Pré-matrícula* conforme a reserva foi gerada ou paga, ajusta o valor e preenche os campos
-   de pai/mãe/responsável.
+   de pai/mãe/responsável. **Novo (2026-07-31):** quando a **matrícula fica ativa no RM**, o
+   mesmo processo move a negociação para a etapa final *Matriculado* e dispara o evento
+   "matrícula confirmada" — **desde que** a coluna *Matriculado* esteja apontada na
+   configuração (enquanto não estiver, para em *Pré-matrícula* e *Matriculado* segue manual).
+   Lembrando que a matrícula efetiva também exige a **assinatura do contrato via DocuSign**,
+   cuja integração com o sistema **ainda está em desenvolvimento** (ver Passo 11).
 3. **Sincroniza visitas** — mantém os cartões de visita em dia, cria os novos, e **avança
    *Visita agendada → Visita realizada*** quando a secretaria registra o comparecimento —
    disparando também o evento "visita realizada" no Marketing.
@@ -449,9 +479,10 @@ editá-los à mão no RD, o próximo processo automático pode **sobrescrever** 
 consistência do funil se quebra. **Deixe o sistema cuidar destes:**
 
 - **A etapa do candidato no pipeline do CRM** nas fases automáticas: *Inscrito → Taxa paga →
-  Cadastro de matrícula → Pré-matrícula* e *Visita agendada → Visita realizada*. **Não arraste
-  o cartão à mão** para essas colunas — o sistema faz isso com base no pagamento real. *(A
-  única etapa que **é** manual é a final, `Matriculado` — ver 6.2.)*
+  Cadastro de matrícula → Pré-matrícula → Matriculado* e *Visita agendada → Visita realizada*.
+  **Não arraste o cartão à mão** para essas colunas — o sistema faz isso com base no fato real
+  (pagamento e, agora, matrícula ativa no RM). *(Até 2026-07-31 a etapa final `Matriculado`
+  era a única manual; passou a ser automática quando a coluna estiver configurada — ver 6.2.)*
 - **O valor e os produtos** do cartão (taxa de inscrição / reserva de R$ 2.200).
 - **A origem/fonte** do contato e do cartão — **preenchida via API** (ver §7).
 - **Os campos preenchidos pela automação** (número da inscrição, datas, dados de pai/mãe/
@@ -464,7 +495,9 @@ consistência do funil se quebra. **Deixe o sistema cuidar destes:**
 
 Estes itens **não** são tocados pelo sistema — é aqui que a operação humana atua:
 
-- **Marcar a etapa final `Matriculado`** (não é automatizada).
+- **Marcar a etapa final `Matriculado`** — **apenas enquanto a coluna não estiver configurada**
+  no sistema. Depois de apontada a coluna *Matriculado*, o próprio sistema faz a transição
+  quando a matrícula fica ativa no RM (ver 6, processo #2). Até lá, segue manual.
 - **A temperatura do lead** (as "chamas" de quente/morno/frio no cartão do CRM) — ver 6.3.
 - **O motivo de perda** quando um caso não fecha (Desistiu, Matriculou em outra escola, Não
   pagou a taxa…).
@@ -587,8 +620,9 @@ pessoa cuida do julgamento.**
 **✅ Já funciona hoje**
 
 - Contato único por e-mail, com linha do tempo completa de eventos.
-- 8 eventos de funil ativos (da visita à reserva paga), incluindo os recém-implementados
-  **"área escolhida"** (abandono por segmento) e **"visita realizada"** (nutrição pós-visita).
+- 10 eventos de funil ativos (da visita à reserva paga), incluindo os recém-implementados
+  **"área escolhida"** (abandono por segmento) e **"visita realizada"** (nutrição pós-visita);
+  são **11** quando a etapa *Matriculado* está configurada (evento "matrícula confirmada").
 - CRM com pipeline completo, movido automaticamente pelos pagamentos reais.
 - **Cartão único** (visita + inscrição), evitando duplicidade.
 - **Reenvio automático** dos eventos de Marketing em caso de falha temporária de rede.

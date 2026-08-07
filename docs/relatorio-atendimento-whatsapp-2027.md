@@ -19,8 +19,9 @@ a conversa entra em um **painel único de atendimento** (Chatwoot) onde a equipe
 forma organizada, e há uma **rede de segurança**: se dentro do horário ninguém responder em
 **5 minutos**, o sistema avisa a família automaticamente que retornaremos — evitando a sensação
 de abandono. As **decisões operacionais já foram tomadas** (atendente, textos, respostas prontas
-e horário — ver item 4) e o sistema **está pronto para uso**. A única pendência é **externa**: a
-aprovação dos templates de retomada pela Meta, que libera as respostas após 24h (item 2.7).
+e horário — ver item 4) e o sistema **está pronto para uso**. Os **modelos de retomada exigidos
+pela Meta** para responder após 24h já foram **aprovados**, e o **reengajamento automático está
+ligado** (item 2.7). Resta apenas o **teste de ponta a ponta** antes do anúncio.
 
 ---
 
@@ -44,7 +45,22 @@ conforme o horário:
 
 - **Fora do horário** acrescenta:
   > No momento estamos fora do horário de atendimento (segunda a sexta, das 8h às 17h).
-  > Pode deixar sua mensagem por aqui: ela ficará registrada e responderemos assim que possível. 🙏
+  > Seu contato foi registrado e responderemos assim que possível. 🙏
+
+#### 2.2.1 Mensagens seguintes (da 2ª em diante)
+Para não parecer um robô repetindo a mesma saudação, a **partir da segunda mensagem** da mesma
+família o assistente **não repete as boas-vindas**. Ele envia apenas uma **confirmação curta**,
+também **adaptada ao horário**:
+
+- **Dentro do horário:**
+  > ✅ Recebemos sua mensagem! Ela já está registrada e um de nossos atendentes vai responder por
+  > aqui em instantes. 🙏
+
+- **Fora do horário:**
+  > ✅ Recebemos sua mensagem! No momento estamos fora do horário de atendimento (segunda a sexta,
+  > das 8h às 17h). Seu contato foi registrado e responderemos assim que possível. 🙏
+
+Assim a família sempre tem retorno imediato, sem ruído de mensagens repetidas.
 
 ### 2.3 Central de atendimento (painel único)
 Toda conversa aparece em um **painel único** (Chatwoot), onde a equipe:
@@ -103,7 +119,8 @@ Detalhes importantes:
 
 ### 2.5 Horário e fuso
 - **Atendimento:** segunda a sexta, **8h–17h**.
-- O servidor e todos os textos usam o **horário de Brasília** (America/Sao_Paulo).
+- Todas as mensagens e regras são calculadas no **horário de Brasília** (America/Sao_Paulo),
+  independentemente do fuso do servidor (a conversão é feita pelo próprio sistema).
 - O horário está **igual** na mensagem automática e na rede de segurança (mesma configuração).
 
 ### 2.6 Infraestrutura e custo
@@ -116,27 +133,32 @@ Detalhes importantes:
   mensagens pelo WhatsApp** (tarifas da Meta).
 
 ### 2.7 Solução para a "janela de 24h" do WhatsApp
-O WhatsApp (Meta) só permite **texto livre nas primeiras 24h** após a última mensagem da família.
-Passado esse prazo (ex.: mensagem enviada na sexta à noite e respondida na segunda), só é possível
-retomar com uma **mensagem de modelo aprovada pela Meta (template/HSM)**. A solução implementada:
+**Isto é uma limitação da Meta, não do nosso sistema.** O WhatsApp (Meta) só permite **texto livre
+nas primeiras 24h** após a última mensagem da família. Passado esse prazo (ex.: mensagem enviada na
+sexta à noite e respondida na segunda), a **própria Meta bloqueia** o texto livre e só aceita uma
+**mensagem de modelo previamente aprovada por ela (template/HSM)**. Essa regra vale para qualquer
+empresa no WhatsApp — não é escolha nem falha da escola. A solução implementada:
 
-- **Templates de retomada criados e submetidos à Meta** (categoria *Utilidade*), aguardando
-  aprovação. Textos:
-  1. *Retomada padrão* — "Olá! 👋 Aqui é o time de Admissões do Colégio Santo Agostinho. Recebemos
-     sua mensagem sobre o Processo Seletivo 2027 e continuamos à disposição para ajudar. Se ainda
-     precisar de atendimento, é só responder esta mensagem que seguimos por aqui. 🙏"
-  2. *Retomada com nome* — versão personalizada ("Olá, [nome]! …").
-- **Envio manual pelo atendente:** assim que a Meta aprovar, o próprio painel passa a oferecer
-  esses templates para o atendente retomar qualquer conversa fora das 24h, com um clique.
-- **Reengajamento automático (opcional):** a rede de segurança pode, dentro do horário, reabrir
-  automaticamente **uma vez** as conversas que passaram das 24h sem resposta (típico de mensagens
-  de fim de semana), enviando o template de retomada. **Fica desligado por padrão** e só deve ser
-  ligado após a aprovação do template e o aval da direção.
+- **Templates de retomada aprovados pela Meta** (já em uso). Textos:
+  1. *Retomada padrão* (`retomada_atendimento_2027`, categoria *Utilidade*) — "Olá! 👋 Aqui é o
+     time de Admissões do Colégio Santo Agostinho. Recebemos sua mensagem sobre o Processo Seletivo
+     2027 e continuamos à disposição para ajudar. Se ainda precisar de atendimento, é só responder
+     esta mensagem que seguimos por aqui. 🙏"
+  2. *Retomada com nome* (`retomada_admissao_nome_2027`) — "Olá, [nome]! 👋 Aqui é o time de
+     Admissões do Colégio Santo Agostinho. Damos continuidade ao seu atendimento do Processo
+     Seletivo 2027. Podemos seguir por aqui? Se precisar, é só responder esta mensagem. 🙏"
+- **Envio manual pelo atendente:** o próprio painel oferece esses templates para o atendente
+  retomar qualquer conversa fora das 24h, com um clique.
+- **Reengajamento automático (ligado):** dentro do horário, o sistema reabre automaticamente
+  **uma única vez** as conversas que passaram das 24h sem resposta (típico de mensagens de fim de
+  semana), enviando o template de retomada padrão e marcando a conversa com a etiqueta
+  `retomada-enviada`. Para não incomodar, só reengaja conversas que envelheceram **recentemente**
+  (até ~3 dias); mais antigas que isso não são reabertas automaticamente.
 - **Por que a família recebe o template:** ele **reabre a janela de 24h**, permitindo que o
   atendente volte a conversar normalmente em texto livre.
 
-> A aprovação dos templates é o **único item com prazo externo** (depende da Meta, normalmente
-> algumas horas a poucos dias). Por isso já foram submetidos.
+> **Status:** ambos os templates estão **aprovados** pela Meta e o reengajamento automático está
+> **ligado** em produção.
 
 ---
 
@@ -156,10 +178,11 @@ retomar com uma **mensagem de modelo aprovada pela Meta (template/HSM)**. A solu
    automático de espera (a rede de segurança é um "seguro", não o padrão desejado).
 6. **Ao concluir**, marque a conversa como **resolvida**. Ela reabre sozinha se a família
    responder de novo.
-7. **Regra das 24h:** se a última mensagem da família tem mais de 24h, o WhatsApp **não** permite
-   texto livre — será necessário um **template aprovado** (ver item 5). Os templates já foram
-   submetidos à Meta e **aguardam aprovação**; enquanto não aprovados, essas retomadas precisam ser
-   feitas por outro meio (ligação/e-mail).
+7. **Regra das 24h (limitação da Meta):** se a última mensagem da família tem mais de 24h, o
+   WhatsApp **não** permite texto livre — é preciso um **template aprovado**. Os templates de
+   retomada já estão **aprovados**: o painel oferece o modelo com um clique e, além disso, o
+   sistema **reengaja sozinho** as conversas paradas de fim de semana (ver §2.7). Quando a família
+   responder ao template, a conversa volta ao normal em texto livre.
 
 **O que NÃO fazer:**
 - Não use o canal para assuntos fora do PS 2027 (redirecione à Secretaria).
@@ -193,7 +216,7 @@ entregues normalmente assim que as opções abaixo forem marcadas.
 
 ---
 
-## 4. Decisões tomadas e pendência externa
+## 4. Decisões tomadas e situação atual
 
 **Decisões já tomadas pela direção (tudo em uso):**
 
@@ -202,13 +225,14 @@ entregues normalmente assim que as opções abaixo forem marcadas.
 | **Atendente** | Conversas atribuídas **exclusivamente** a Renata Azevedo (`renata.azevedo@csa.com.br`), time `admissões-crm` |
 | **Textos automáticos** (boas-vindas, fora de horário, aviso de espera) | **Aprovados** |
 | **Respostas prontas** (18, baseadas nos editais) | **Aprovadas** |
-| **Textos dos templates de retomada** | **Aprovados** pela direção |
+| **Textos dos templates de retomada** | **Aprovados** pela direção **e pela Meta** |
 | **Horário oficial** | **Confirmado**: seg–sex, 8h–17h (America/Sao_Paulo) |
 
-**Única pendência — externa (Meta):** os templates de retomada estão **submetidos e aguardando
-aprovação da Meta** (status atual: *em análise*). Só após a aprovação é possível (a) o atendente
-enviar o template manualmente para retomar conversas fora das 24h e (b) ligar o **reengajamento
-automático** (hoje desligado, ver §2.7). Assim que a Meta aprovar, a TI ativa em um passo.
+**Situação da retomada após 24h:** os templates estão **aprovados pela Meta** e o **reengajamento
+automático já está ligado** em produção (ver §2.7) — o atendente também pode enviar o template
+manualmente pelo painel. Não há pendências externas.
+
+**Único item em aberto:** o **teste de ponta a ponta** antes do anúncio oficial.
 
 ---
 
@@ -217,27 +241,28 @@ automático** (hoje desligado, ver §2.7). Assim que a Meta aprovar, a TI ativa 
 Os itens abaixo **não fazem parte do que está no ar hoje**. São evoluções recomendadas, a serem
 priorizadas pela direção após o lançamento:
 
-1. **Reengajamento automático fora das 24h (já preparado):** os templates de retomada **já foram
-   submetidos à Meta** e o mecanismo de reenvio automático está pronto no sistema, apenas
-   **desligado**. Após a aprovação da Meta, basta a direção autorizar para ligá-lo (ver §2.7).
-2. **Perguntas frequentes automáticas (FAQ 24/7):** o assistente responde dúvidas comuns (taxa,
+> **Nota:** o **reengajamento automático fora das 24h** — antes listado aqui como projeto futuro —
+> **já foi implementado e está em produção** (templates aprovados pela Meta e reenvio automático
+> ligado, ver §2.7). Deixou de ser um item futuro.
+
+1. **Perguntas frequentes automáticas (FAQ 24/7):** o assistente responde dúvidas comuns (taxa,
    documentos, datas) sozinho, inclusive fora do horário.
-3. **Triagem inteligente:** encaminhar automaticamente cada conversa para a pessoa/área certa
+2. **Triagem inteligente:** encaminhar automaticamente cada conversa para a pessoa/área certa
    conforme o assunto.
-4. **Pré-cadastro assistido:** o assistente coleta dados básicos (nome, série pretendida, contato)
+3. **Pré-cadastro assistido:** o assistente coleta dados básicos (nome, série pretendida, contato)
    antes do atendente entrar.
-5. **Pesquisa de satisfação (CSAT)** ao fim do atendimento, para medir qualidade.
-6. **Alertas em tempo real em canal interno** (ex.: aviso no WhatsApp/Slack/Telegram de um grupo da
+4. **Pesquisa de satisfação (CSAT)** ao fim do atendimento, para medir qualidade.
+5. **Alertas em tempo real em canal interno** (ex.: aviso no WhatsApp/Slack/Telegram de um grupo da
    equipe quando há conversa aguardando). *Observação:* o aviso individual por e-mail e navegador
    **já está disponível** para cada atendente (ver §3.1); este item é a evolução para um **alerta
    compartilhado de equipe**, útil quando houver mais de uma pessoa no plantão.
-7. **Integração com o portal de admissão:** informar a situação da inscrição/matrícula direto na
+6. **Integração com o portal de admissão:** informar a situação da inscrição/matrícula direto na
    conversa.
-8. **Relatórios gerenciais avançados:** volume por assunto, tempo de resposta, horários de pico,
+7. **Relatórios gerenciais avançados:** volume por assunto, tempo de resposta, horários de pico,
    conversão de interessados em inscritos (visão de CRM).
 
-> Cada evolução pode ser adotada de forma independente. As de maior retorno imediato costumam ser
-> **templates de retomada** (destrava respostas após 24h) e **FAQ 24/7** (reduz volume repetitivo).
+> Cada evolução pode ser adotada de forma independente. A de maior retorno imediato costuma ser a
+> **FAQ 24/7** (reduz volume repetitivo).
 
 ---
 
