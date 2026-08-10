@@ -8,9 +8,6 @@
 		},
 		{
 			"path": "../python/TOTVS_import/email"
-		},
-		{
-			"path": "../security-portal/portal"
 		}
 	],
 	"settings": {}
