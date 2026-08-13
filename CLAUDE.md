@@ -103,6 +103,7 @@ em [docs/tech-info.md](docs/tech-info.md).
 - [guia_hotsite_csa_leblon_2027.md](docs/guia_hotsite_csa_leblon_2027.md) — guia visual/conteúdo do hotsite.
 - [guia_customizacao_portal_processo_seletivo_totvs.md](docs/guia_customizacao_portal_processo_seletivo_totvs.md) — customização oficial TOTVS (FrameHTML).
 - [testes-homolog.md](docs/testes-homolog.md) — contas/CPFs de teste ⚠️ contém dados sensíveis.
+- [otimizacao-custo-claude-code.md](docs/otimizacao-custo-claude-code.md) — estratégias para reduzir o custo do Claude Code (Sonnet padrão × Opus sob demanda, `/clear`, subagentes, Vertex).
 
 ## Convenções
 
@@ -110,3 +111,20 @@ em [docs/tech-info.md](docs/tech-info.md).
   (o código já é assim). Siga o estilo do arquivo vizinho.
 - Commits seguem Conventional Commits em pt-BR: `feat(escopo): …`, `docs(rd): …`.
 - Commit/push apenas quando solicitado.
+
+## Custo & modelo (disciplina de uso do Claude Code)
+
+O Claude Code roda via **Vertex AI (GCP)**. Opus custa ~5× o Sonnet e ~15× o Haiku (a saída
+pesa mais que a entrada). Meta: mesma qualidade, menos gasto. Plano completo em
+[docs/otimizacao-custo-claude-code.md](docs/otimizacao-custo-claude-code.md).
+
+- **Padrão = Sonnet 5** (fixado em `.claude/settings.json` → `"model": "claude-sonnet-5"`).
+  ⚠️ Usa-se o ID completo, não o alias `sonnet` (que aponta p/ Sonnet 4.5, não habilitado neste
+  Vertex). Opus só sob demanda com `/model opus` e voltar com `/model claude-sonnet-5`.
+- **`/clear` entre tarefas independentes** — o histórico é reenviado a cada turno.
+- **Buscas amplas via subagente** (Explore / `Agent` em modelo barato); leituras cirúrgicas
+  (`Grep` + `Read` com `offset/limit`); não reler para conferir após editar.
+- **Não editar CLAUDE.md/MEMORY no meio da sessão** (invalida o cache de prefixo).
+- **Vertex:** aliases `sonnet`/`opus`/`haiku` resolvem para os IDs do Vertex se habilitados no
+  Model Garden na região (`CLOUD_ML_REGION`; senão `VERTEX_REGION_CLAUDE_*`). Aponte
+  `ANTHROPIC_SMALL_FAST_MODEL` para o Haiku (tarefas de fundo). Governança: `/cost`, `/context`.
