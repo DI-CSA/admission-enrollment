@@ -103,7 +103,7 @@ em [docs/tech-info.md](docs/tech-info.md).
 - [guia_hotsite_csa_leblon_2027.md](docs/guia_hotsite_csa_leblon_2027.md) — guia visual/conteúdo do hotsite.
 - [guia_customizacao_portal_processo_seletivo_totvs.md](docs/guia_customizacao_portal_processo_seletivo_totvs.md) — customização oficial TOTVS (FrameHTML).
 - [testes-homolog.md](docs/testes-homolog.md) — contas/CPFs de teste ⚠️ contém dados sensíveis.
-- [otimizacao-custo-claude-code.md](docs/otimizacao-custo-claude-code.md) — estratégias para reduzir o custo do Claude Code (Sonnet padrão × Opus sob demanda, `/clear`, subagentes, Vertex).
+- [otimizacao-custo-claude-code.md](docs/otimizacao-custo-claude-code.md) — estratégias para reduzir o custo do Claude Code (Sonnet padrão × Opus sob demanda × Haiku no trivial, `/clear`, subagentes, Vertex).
 
 ## Convenções
 
@@ -121,10 +121,12 @@ pesa mais que a entrada). Meta: mesma qualidade, menos gasto. Plano completo em
 - **Padrão = Sonnet 5** (fixado em `.claude/settings.json` → `"model": "claude-sonnet-5"`).
   ⚠️ Usa-se o ID completo, não o alias `sonnet` (que aponta p/ Sonnet 4.5, não habilitado neste
   Vertex). Opus só sob demanda com `/model opus` e voltar com `/model claude-sonnet-5`.
+- **Haiku 4.5 habilitado** — trivial (renome, ajuste de texto) via `/model
+  claude-haiku-4-5@20251001`; também é o modelo de fundo, já fixado em
+  `.claude/settings.json` (`env.ANTHROPIC_SMALL_FAST_MODEL`).
 - **`/clear` entre tarefas independentes** — o histórico é reenviado a cada turno.
 - **Buscas amplas via subagente** (Explore / `Agent` em modelo barato); leituras cirúrgicas
   (`Grep` + `Read` com `offset/limit`); não reler para conferir após editar.
 - **Não editar CLAUDE.md/MEMORY no meio da sessão** (invalida o cache de prefixo).
-- **Vertex:** aliases `sonnet`/`opus`/`haiku` resolvem para os IDs do Vertex se habilitados no
-  Model Garden na região (`CLOUD_ML_REGION`; senão `VERTEX_REGION_CLAUDE_*`). Aponte
-  `ANTHROPIC_SMALL_FAST_MODEL` para o Haiku (tarefas de fundo). Governança: `/cost`, `/context`.
+- **Vertex:** aliases `opus`/`haiku` resolvem para os IDs do Vertex normalmente; só `sonnet`
+  precisa do ID completo (aponta p/ Sonnet 4.5, não habilitado). Governança: `/cost`, `/context`.

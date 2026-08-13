@@ -39,19 +39,22 @@ Três fatos governam a conta:
 A maior parte do trabalho (edições, buscas, boilerplate, docs, correções de lint/tsc) não
 precisa de Opus.
 
-- **Padrão: Sonnet** — fixado em `.claude/settings.json` (`"model": "sonnet"`) nos dois repos.
+- **Padrão: Sonnet** — fixado em `.claude/settings.json` (`"model": "claude-sonnet-5"`) nos
+  dois repos.
 - **Opus só quando o problema pede** (`/model opus`): arquitetura, depuração difícil,
-  raciocínio sutil, revisão crítica. Ao terminar, **voltar** (`/model sonnet`).
-- **Haiku no trivial** (renome, ajuste de texto, edição pontual) — ⚠️ **hoje indisponível**
-  neste Vertex (ver abaixo); habilitar `claude-haiku-4-5@*` no Model Garden para usá-lo.
+  raciocínio sutil, revisão crítica. Ao terminar, **voltar** (`/model claude-sonnet-5`).
+- **Haiku no trivial** (renome, ajuste de texto, edição pontual, buscas amplas via
+  subagente) — `/model claude-haiku-4-5@20251001`. Também é o modelo de fundo
+  (`ANTHROPIC_SMALL_FAST_MODEL`, já fixado em `.claude/settings.json`).
 - Estimativa: migrando ~70% do trabalho de Opus→Sonnet, esse trecho da conta cai ~55–60%.
 - **Fast mode não economiza** — é o mesmo Opus, só mais rápido.
 
 > **Modelos realmente habilitados neste deployment (verificado):** Opus 4.8 ✅, **Sonnet 5**
-> (`claude-sonnet-5`, contexto 1M) ✅ e Sonnet 4 (`claude-sonnet-4@20250514`) ✅. **Sonnet 4.5 e
-> Haiku 4.5 NÃO estão habilitados** — os aliases `sonnet`/`haiku` apontam para essas versões e
-> falham. Hierarquia prática atual: **Sonnet 5 (padrão) × Opus 4.8 (sob demanda)**. Para um tier
-> barato e um modelo de fundo econômico (`ANTHROPIC_SMALL_FAST_MODEL`), habilite o Haiku.
+> (`claude-sonnet-5`, contexto 1M) ✅, Sonnet 4 (`claude-sonnet-4@20250514`) ✅ e **Haiku 4.5**
+> (`claude-haiku-4-5@20251001`) ✅. **Sonnet 4.5 NÃO está habilitado** — o alias `sonnet` aponta
+> para essa versão e falha. Hierarquia prática atual: **Sonnet 5 (padrão) × Opus 4.8 (sob
+> demanda) × Haiku 4.5 (trivial/fundo)**. Os aliases `opus`/`haiku` funcionam normalmente (a
+> versão mais nova de cada um está habilitada); só o `sonnet` precisa do ID completo.
 
 ### 1.2 `/clear` entre tarefas independentes
 Terminou e validou uma tarefa? `/clear` antes da próxima. Regra: **uma tarefa lógica = uma
@@ -157,11 +160,13 @@ Três formas (usamos a 1ª):
 - Sob `CLAUDE_CODE_USE_VERTEX=1`, os aliases `sonnet`/`opus`/`haiku` só resolvem se **aquela
   versão exata** estiver **habilitada no Model Garden** do projeto. O alias aponta sempre para a
   versão mais nova (ex.: `sonnet`→4.5); se só a anterior está habilitada, **use o ID completo**.
+  Hoje só `sonnet` está nessa situação — `opus` e `haiku` resolvem normalmente.
 - **Região:** modelos podem viver em regiões diferentes. `CLOUD_ML_REGION` define a padrão; se
   os modelos não estiverem todos na mesma, use overrides por modelo (`VERTEX_REGION_CLAUDE_*`).
-- **Modelo pequeno/rápido** (tarefas de fundo: resumos, geração de título): controlado por
-  **`ANTHROPIC_SMALL_FAST_MODEL`**. Aponte para o **Haiku** (habilite-o no Model Garden) para
-  essas chamadas não rodarem em tier caro.
+- **Modelo pequeno/rápido** (tarefas de fundo: resumos, geração de título, subagentes
+  triviais): controlado por **`ANTHROPIC_SMALL_FAST_MODEL`** — já fixado em
+  `.claude/settings.json` (`env.ANTHROPIC_SMALL_FAST_MODEL = "claude-haiku-4-5@20251001"`) nos
+  dois repos.
 
 ### Modelos disponíveis vs. aliases (referência rápida)
 | Alias Claude Code | ID Vertex | Neste deployment |
@@ -170,7 +175,7 @@ Três formas (usamos a 1ª):
 | — (ID completo) | `claude-sonnet-4@20250514` (Sonnet 4) | ✅ habilitado |
 | `sonnet` | `claude-sonnet-4-5@20250929` (Sonnet 4.5) | ❌ não habilitado |
 | `opus` | `claude-opus-4-*` (Opus 4.8) | ✅ em uso |
-| `haiku` | `claude-haiku-4-5@20251001` | ❌ não habilitado |
+| `haiku` | `claude-haiku-4-5@20251001` (Haiku 4.5) | ✅ habilitado — trivial/fundo |
 
 ---
 
@@ -184,7 +189,7 @@ Três formas (usamos a 1ª):
 | 4 | Leituras cirúrgicas; não reler p/ conferir | baixo | 🔥🔥 |
 | 5 | Quebrar arquivos de 1.500+ linhas | médio | 🔥🔥 (composto) |
 | 6 | Não editar `CLAUDE.md`/`MEMORY` no meio da sessão | trivial | 🔥 |
-| 7 | `ANTHROPIC_SMALL_FAST_MODEL` = Haiku | trivial | 🔥 |
+| 7 | `ANTHROPIC_SMALL_FAST_MODEL` = Haiku 4.5 (já ativo) | trivial | 🔥 |
 | 8 | `/cost` + billing por modelo | baixo | 🔥 (governança) |
 
 O maior retorno vem de **1 e 2**: sozinhos tendem a derrubar a conta em torno de metade, sem
