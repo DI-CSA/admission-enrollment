@@ -61,9 +61,16 @@ sessão, cliente RM, leituras SQL, design system e operação do mesmo deploy.
 Os portais TOTVS conversam com **WebAPIs distintas** do RM (Inscrições →
 `TOTVSProcessoSeletivo`/EduPS; Aluno/Professor → `RM.Edu.WebAPI`/Educacional), mas **o
 padrão de autenticação é o mesmo**: sessão por **cookie do RM**, capturada pelo BFF
-server-side. Por isso a camada `lib/rm` (cliente) e `lib/auth` (sessão) nascem **genéricas**,
-apontando para **qualquer WebAPI do RM**, e o `middleware.ts` protege as rotas dos portais.
-Assim a autenticação já fica pronta para os módulos futuros.
+server-side. Por isso a camada `lib/rm` (cliente) e `lib/totvs` (sessão) nascem
+**genéricas**, apontando para **qualquer WebAPI do RM**. Assim a autenticação já fica pronta
+para os módulos futuros.
+
+> **Correção (versões anteriores deste doc citavam um `middleware.ts` na raiz do app,
+> protegendo as rotas dos portais).** **Esse arquivo não existe** — não há middleware global.
+> A proteção é feita **por rota**, chamando `sessaoDaRequisicao()`
+> (`lib/totvs/sessao-req.ts`) no início de cada handler que precisa de sessão; sem cookie
+> válido, o próprio handler responde 401. Detalhe completo em
+> [autenticacao-totvs-rm.md](autenticacao-totvs-rm.md).
 
 ### 0.4. Estrutura da plataforma
 
@@ -72,17 +79,26 @@ app/
   page.tsx              # ENTRADA do Portal de Inscrições (o "hot site": hero + 2 editais + lead)
   inscricoes/           # fluxo nativo de inscrição e painel do responsável
   matricula/            # fluxo dedicado de matrícula dos candidatos elegíveis
+  api/auth/             # login, logout, me, reconhecer (CPF), recuperar-senha
   api/inscricao/        # BFF da inscrição, documentos, boleto e comprovante
   api/matricula/        # BFF da matrícula, contrato, documentos, planos e boleto
-  api/jobs/             # conciliações RM → RD Station
+  api/visitas/          # agendamento de visitas (Postgres schema `agos`) + "chamada"
+  api/marketing/        # beacons de funil (inscricao-iniciada, area-escolhida)
+  api/jobs/             # conciliações RM/AGOS → RD Station (ver §8 de integracao_rd_station.md)
+  api/areas/, api/csa/[slug]/, api/documentos-exigidos/,
+  api/processos/, api/programas/[codigo]/, api/series/
+                        # rotas de catálogo/conteúdo do hot site (séries, programas, páginas CSA)
   portal-aluno/         # FUTURO — outro módulo (auth TOTVS)
   portal-professor/     # FUTURO — outro módulo (auth TOTVS)
-  middleware.ts         # protege rotas dos portais (sessão TOTVS)
 components/             # design system CSA (compartilhado por todos os módulos)
 lib/
   rm/                   # cliente RM genérico
   totvs/                # inscrição, matrícula, sessão e consultas SQL
   marketing/            # RD Marketing, RD CRM e conciliações
+  agenda/               # store Postgres de visitas + sincronização com o CRM
+  notificacoes/         # e-mail transacional (ex.: aviso de visita à secretaria)
+  matricula-flags.ts    # feature flags específicas do fluxo de matrícula
+  csa/, legal/          # conteúdo estático do hot site (páginas institucionais, termos)
   processos.ts          # config dos PS de 2027 (IDs ps)
 ```
 

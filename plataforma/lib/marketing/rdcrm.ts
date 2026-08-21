@@ -478,6 +478,18 @@ export interface NegociacaoCrm {
   dealStageName: string | null;
   /** IDLAN extraído do token `[LAN:<idlan>]` no nome; null se ausente. */
   idLan: string | null;
+  /**
+   * Negociação já fechada (ganha ou perdida). Confirmado via GET /deals real:
+   * `win` é `null` enquanto aberta e `true`/`false` quando fechada; `closed_at`
+   * acompanha. Usado para não tratar como "zumbi" (ou reabrir) um deal que já
+   * foi encerrado.
+   */
+  fechado: boolean;
+}
+
+/** Deal fechado (ganho ou perdido): `win` sai de `null`, ou `closed_at` é setado. */
+function extrairFechado(d: Record<string, unknown>): boolean {
+  return typeof d.win === "boolean" || d.closed_at != null;
 }
 
 /** Extrai o id da etapa de um objeto `deal_stage` (a API varia entre id/_id). */
@@ -532,6 +544,7 @@ export async function buscarNegociacaoPorNumeroInscricao(
       dealStageId: extrairStageId(alvo.deal_stage),
       dealStageName: extrairStageName(alvo.deal_stage),
       idLan: extrairIdLanDoNome(typeof alvo.name === "string" ? alvo.name : ""),
+      fechado: extrairFechado(alvo),
     };
   } catch (e) {
     console.warn("[rdcrm] falha ao buscar negociação:", base, e);
@@ -590,6 +603,7 @@ export async function listarNegociacoesDoFunil(): Promise<NegociacaoCrm[]> {
         dealStageId: extrairStageId(d.deal_stage),
         dealStageName: extrairStageName(d.deal_stage),
         idLan: extrairIdLanDoNome(nome),
+        fechado: extrairFechado(d),
       });
     }
     const hasMore =
@@ -917,6 +931,268 @@ export async function atualizarCamposMatriculaDeal(
     return true;
   } catch (e) {
     console.warn("[rdcrm] falha ao atualizar campos matrícula:", dealId, e);
+    return false;
+  }
+}
+
+/**
+ * Cria uma Tarefa/Atividade no CRM associada a um Deal.
+ * POST /tasks?token=...
+ */
+export async function criarTarefaCrm(
+  dealId: string,
+  subject: string,
+  notes: string,
+  date?: string | null,
+): Promise<boolean> {
+  const token = process.env.RD_CRM_TOKEN;
+  if (!token || !dealId) return false;
+
+  const payload = {
+    task: {
+      deal_id: dealId,
+      subject: subject,
+      type: "task",
+      date: date || new Date().toISOString().split("T")[0],
+      hour: "10:00",
+      notes: notes,
+      user_ids: [
+        "6a18381d62e4480023f5619d", // cesar@csa.com.br
+        "6a5632a33e82950030230eb3"  // renata.azevedo@csa.com.br
+      ]
+    },
+  };
+
+  try {
+    const res = await fetch(`${RD_CRM_BASE}/tasks?token=${encodeURIComponent(token)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      console.warn("[rdcrm] falha ao criar tarefa:", res.status, await res.text());
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.warn("[rdcrm] exceção ao criar tarefa:", dealId, e);
+    return false;
+  }
+}
+
+/**
+ * Atualiza tags de um deal existente.
+ * O RD Station CRM v1 permite atualizar as tags via PUT em /deals/{id}.
+ */
+export async function atualizarTagsDeal(
+  dealId: string,
+  tagsToAdd: string[],
+  tagsToRemove: string[] = [],
+): Promise<boolean> {
+  const token = process.env.RD_CRM_TOKEN;
+  if (!token || !dealId) return false;
+  if (tagsToAdd.length === 0 && tagsToRemove.length === 0) return true;
+
+  try {
+    // 1. Busca as tags atuais
+    const getRes = await fetch(`${RD_CRM_BASE}/deals/${encodeURIComponent(dealId)}?token=${encodeURIComponent(token)}`);
+    if (!getRes.ok) return false;
+    const dealData = (await getRes.json()) as { tags?: Array<{ name: string }> };
+
+    const existingTags = dealData.tags?.map((t) => t.name) || [];
+
+    // 2. Remove as tags indesejadas e adiciona as novas
+    const finalTags = existingTags.filter((t: string) => !tagsToRemove.includes(t));
+    for (const t of tagsToAdd) {
+      if (!finalTags.includes(t)) finalTags.push(t);
+    }
+
+    // 3. Atualiza o deal
+    const putRes = await fetch(`${RD_CRM_BASE}/deals/${encodeURIComponent(dealId)}?token=${encodeURIComponent(token)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ deal: { tags: finalTags } }),
+    });
+
+    if (!putRes.ok) {
+      console.warn("[rdcrm] falha ao atualizar tags:", putRes.status, await putRes.text());
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.warn("[rdcrm] exceção ao atualizar tags:", dealId, e);
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Encerramento de negociações e tarefas — "Zero Zombie Deal"
+// ---------------------------------------------------------------------------
+//
+// Confirmado via GET /deals real (homolog): o deal tem `win: null|true|false` e
+// `closed_at: null|<data>` — null = aberto; true/false = fechado (ganho/perdido).
+
+/**
+ * Marca a negociação como GANHA (win=true). Usado para encerrar automaticamente
+ * o card de visita quando a família já avançou para Inscrição/Matrícula em um
+ * card SEPARADO ("Zero Zombie Deal" — ver conciliar-funil-crm.ts). PUT /deals/{id}.
+ * Nunca lança: em falha retorna false.
+ */
+export async function marcarNegociacaoGanha(dealId: string): Promise<boolean> {
+  const token = process.env.RD_CRM_TOKEN;
+  if (!token || !dealId) return false;
+  try {
+    const res = await fetch(
+      `${RD_CRM_BASE}/deals/${encodeURIComponent(dealId)}?token=${encodeURIComponent(token)}`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ deal: { win: true } }),
+      },
+    );
+    if (!res.ok) {
+      console.warn("[rdcrm] marcar ganha não-OK:", res.status, dealId);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.warn("[rdcrm] falha ao marcar ganha:", dealId, e);
+    return false;
+  }
+}
+
+export interface TarefaAbertaCrm {
+  id: string;
+  subject: string;
+}
+
+/**
+ * Lista as tarefas ABERTAS (done=false) de um deal (GET /tasks?deal_id=...).
+ * Confere o vínculo com o deal no cliente (defesa extra, caso o filtro do
+ * servidor não seja respeitado — confirmado campo `deal_id`/`deal.id` via teste
+ * real). Usada para (a) fechar tarefas órfãs ao encerrar um deal e (b) checar
+ * duplicidade antes de criar uma nova tarefa de follow-up. Nunca lança: em
+ * falha retorna [].
+ */
+export async function listarTarefasAbertasDoDeal(dealId: string): Promise<TarefaAbertaCrm[]> {
+  const token = process.env.RD_CRM_TOKEN;
+  if (!token || !dealId) return [];
+  try {
+    const res = await fetch(
+      `${RD_CRM_BASE}/tasks?token=${encodeURIComponent(token)}&deal_id=${encodeURIComponent(dealId)}&limit=100`,
+      { headers: { Accept: "application/json" } },
+    );
+    if (!res.ok) return [];
+    const body = (await res.json()) as unknown;
+    const lista = Array.isArray(body)
+      ? (body as Array<Record<string, unknown>>)
+      : ((body as { tasks?: Array<Record<string, unknown>> })?.tasks ?? []);
+    return lista
+      .filter((t) => {
+        const deal = t.deal as { id?: unknown; _id?: unknown } | undefined;
+        const id = String(t.deal_id ?? deal?.id ?? deal?._id ?? "");
+        return id === dealId && t.done !== true;
+      })
+      .map((t) => ({
+        id: String(t.id ?? t._id ?? ""),
+        subject: typeof t.subject === "string" ? t.subject : "",
+      }))
+      .filter((t) => t.id);
+  } catch (e) {
+    console.warn("[rdcrm] falha ao listar tarefas do deal:", dealId, e);
+    return [];
+  }
+}
+
+/**
+ * Marca uma tarefa como concluída (PUT /tasks/{id}, `done: true`). Usada para
+ * fechar as tarefas pendentes de um card de visita "zumbi" ao encerrá-lo — para
+ * não aparecerem na lista de trabalho do SDR. Nunca lança: em falha retorna false.
+ */
+export async function concluirTarefa(taskId: string): Promise<boolean> {
+  const token = process.env.RD_CRM_TOKEN;
+  if (!token || !taskId) return false;
+  try {
+    const res = await fetch(
+      `${RD_CRM_BASE}/tasks/${encodeURIComponent(taskId)}?token=${encodeURIComponent(token)}`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ task: { done: true } }),
+      },
+    );
+    if (!res.ok) {
+      console.warn("[rdcrm] concluir tarefa não-OK:", res.status, taskId);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.warn("[rdcrm] falha ao concluir tarefa:", taskId, e);
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Contexto 360º — status consolidado do funil no card de Inscrição/Matrícula
+// ---------------------------------------------------------------------------
+
+export interface Contexto360Deal {
+  /** Ex.: "Taxa de inscrição paga" | "Taxa gerada — aguardando pagamento". */
+  inscricaoStatus?: string | null;
+  /** Ex.: "Matriculado" | "Aguardando reserva de matrícula (R$2.200)". */
+  matriculaStatus?: string | null;
+  /** Conferência de CPF entre visita/inscrição/matrícula (ver plano §"Conferência de CPF"). */
+  vinculoStatus?: string | null;
+  // Contexto da visita, copiado para o card de Inscrição/Matrícula quando NÃO
+  // houve fusão automática (VISITAS_DEAL_UNICO) — reaproveita os MESMOS campos
+  // personalizados já usados no card de visita (mesmo funil/pipeline).
+  visitaSituacao?: string | null;
+  visitaOperador?: string | null;
+  visitaParticipantes?: string | null;
+}
+
+/**
+ * Grava o Contexto 360º (status do funil unificado + dados da visita) no card
+ * de Inscrição/Matrícula (PUT /deals/{id} deal_custom_fields). Só envia os
+ * campos cujo UUID está no ambiente (RD_CRM_CF_INSCRICAO_STATUS_ID/
+ * _MATRICULA_STATUS_ID/_VINCULO_STATUS_ID + os _VISITA_*_ID já existentes).
+ * Nunca lança: em falha retorna false. Retorna false (no-op) quando não há
+ * nenhum campo a enviar.
+ */
+export async function atualizarContexto360Deal(
+  dealId: string,
+  dados: Contexto360Deal,
+): Promise<boolean> {
+  const token = process.env.RD_CRM_TOKEN;
+  if (!token || !dealId) return false;
+  const cf: Array<{ custom_field_id: string; value: string }> = [];
+  const push = (envKey: string, value?: string | null) => {
+    const id = process.env[envKey]?.trim();
+    if (id && value && value.trim()) cf.push({ custom_field_id: id, value: value.trim() });
+  };
+  push("RD_CRM_CF_INSCRICAO_STATUS_ID", dados.inscricaoStatus);
+  push("RD_CRM_CF_MATRICULA_STATUS_ID", dados.matriculaStatus);
+  push("RD_CRM_CF_VINCULO_STATUS_ID", dados.vinculoStatus);
+  push("RD_CRM_CF_VISITA_SITUACAO_ID", dados.visitaSituacao);
+  push("RD_CRM_CF_VISITA_OPERADOR_ID", dados.visitaOperador);
+  push("RD_CRM_CF_VISITA_PARTICIPANTES_ID", dados.visitaParticipantes);
+  if (!cf.length) return false;
+  try {
+    const res = await fetch(
+      `${RD_CRM_BASE}/deals/${encodeURIComponent(dealId)}?token=${encodeURIComponent(token)}`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ deal: { deal_custom_fields: cf } }),
+      },
+    );
+    if (!res.ok) {
+      console.warn("[rdcrm] atualizar contexto 360 não-OK:", res.status, dealId);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.warn("[rdcrm] falha ao atualizar contexto 360:", dealId, e);
     return false;
   }
 }

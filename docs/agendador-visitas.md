@@ -57,6 +57,10 @@ Variáveis (ver `.env.example`): `DATABASE_URL` (compartilhada com a AGOS),
 `VISITAS_DB_SCHEMA` (padrão `agos`), `VISITAS_DB_SSL`. Segredos só em `.env.local` /
 `/etc/csa-portal/.env`.
 
+**Alerta interno à secretaria (opcional):** `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`,
+`SMTP_USER`, `SMTP_PASS`, `VISITA_ALERTA_TO`, `VISITA_ALERTA_BCC`. Sem `SMTP_HOST`, o alerta
+é apenas logado (não quebra o agendamento) — ver "Fora de escopo" abaixo.
+
 ```bash
 # DEV — sobe as tabelas no banco local de testes (localhost:6510) e valida o fluxo:
 #   DATABASE_URL=postgresql://postgres:postgres@localhost:6510/csa
@@ -73,6 +77,11 @@ pnpm visitas:migrate
 ## Fora de escopo (deste sistema)
 
 - Administração de visitas (horários, presença, gestão) → **AGOS**.
-- E-mail transacional próprio (confirmação/lembrete fica na automação do RD).
+- E-mail transacional **para a família** (confirmação/lembrete continua na automação do RD,
+  parceiro). **Atualização:** existe hoje um **alerta interno para a secretaria** (não para a
+  família) a cada visita agendada — ver `lib/notificacoes/email-visita.ts`, SMTP via
+  nodemailer, `VISITA_ALERTA_TO`/`VISITA_ALERTA_BCC`. Best-effort: se o SMTP não estiver
+  configurado, só loga e segue (nunca quebra a confirmação da visita). Distinto do e-mail à
+  família, que permanece fora de escopo aqui.
 - Conversão offline de visita no Google Ads (Fase 2 de `estrategia-marketing-google-rd-station.md`).
 - reCAPTCHA no formulário (hoje há rate-limit; avaliar reforço anti-bot depois).

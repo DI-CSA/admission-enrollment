@@ -21,7 +21,8 @@ import {
 } from "@/lib/marketing/rdcrm";
 import { registrarEventoFunil } from "@/lib/marketing/rdstation";
 
-const SITUACAO_LABEL: Record<string, string> = {
+/** Rótulo de exibição da situação da visita — reaproveitado por conciliar-funil-crm.ts. */
+export const SITUACAO_LABEL: Record<string, string> = {
   agendada: "Agendada",
   confirmada: "Confirmada",
   realizada: "Compareceu",
