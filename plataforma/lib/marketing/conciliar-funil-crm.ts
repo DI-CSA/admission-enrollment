@@ -37,6 +37,7 @@ import {
   marcarNegociacaoGanha,
   listarTarefasAbertasDoDeal,
   concluirTarefa,
+  deletarTarefa,
   atualizarContexto360Deal,
   extrairIdVisitaDoNome,
   type NegociacaoCrm,
@@ -52,13 +53,23 @@ export interface ResultadoConciliacaoFunil {
   tagsAtualizadas: number;
   contextosAtualizados: number;
   tarefasCriadas: number;
+  /** Tarefas "Incentivar Matrícula" prematuras removidas (candidato ainda não em chamada). */
+  tarefasIncentivoRemovidas: number;
   falhas: number;
   logs: Array<{
-    tipo: "zero_zombie" | "contexto_360" | "tarefa_followup" | "identidade_duvidosa";
+    tipo:
+      | "zero_zombie"
+      | "contexto_360"
+      | "tarefa_followup"
+      | "incentivo_removido"
+      | "identidade_duvidosa";
     mensagem: string;
     dealId?: string;
   }>;
 }
+
+/** Prefixo do assunto das tarefas de incentivo à matrícula (para localizá-las). */
+const INCENTIVO_SUBJECT_PREFIX = "Incentivar Matrícula de ";
 
 interface VisitaAgos {
   id: string;
@@ -81,6 +92,14 @@ interface InscricaoTotvs {
   STATUSLAN: number | null;
   RESERVA_STATUS: number | null;
   MAT_PLATIVO: string | null;
+  /**
+   * 1 quando o candidato está "em chamada" — SPSOPCAOINSCRITO.STATUS ∈ (5=EmChamada,
+   * 7=CompareceuChamada). É o sinal AUTORITATIVO de "apto a matricular AGORA": vale
+   * para TODAS as séries (o 1º ano do Fundamental, sem prova, já entra em chamada logo
+   * após a taxa; as séries com prova/entrevista só entram após o resultado). Mesmo
+   * critério de `listarCandidatosElegiveisMatricula` (lib/totvs/queries.ts).
+   */
+  EM_CHAMADA: number | null;
 }
 
 /** "Taxa de inscrição paga" | "Taxa gerada — aguardando pagamento" | etc. */
@@ -95,7 +114,10 @@ function textoStatusMatricula(insc: InscricaoTotvs): string {
   if (insc.RAMAT) return "Matriculado";
   if (insc.RESERVA_STATUS === 1) return "Reserva de matrícula (R$2.200) paga — aguardando efetivação";
   if (insc.RESERVA_STATUS === 0) return "Reserva de matrícula (R$2.200) gerada — aguardando pagamento";
-  if (insc.STATUSLAN === 1) return "Aguardando geração da reserva de matrícula (R$2.200)";
+  if (insc.STATUSLAN === 1)
+    return insc.EM_CHAMADA === 1
+      ? "Em chamada — apto a gerar a reserva de matrícula (R$2.200)"
+      : "Taxa paga — aguardando chamada/resultado do processo seletivo (prova/entrevista)";
   return "Não aplicável (inscrição pendente)";
 }
 
@@ -119,6 +141,7 @@ export async function conciliarFunilCrm(
     tagsAtualizadas: 0,
     contextosAtualizados: 0,
     tarefasCriadas: 0,
+    tarefasIncentivoRemovidas: 0,
     falhas: 0,
     logs: [],
   };
@@ -172,7 +195,13 @@ export async function conciliarFunilCrm(
               resp.EMAIL AS RESP_EMAIL, resp.CPF AS RESP_CPF,
               fl.STATUSLAN,
               res.STATUSLAN AS RESERVA_STATUS,
-              mat.PLATIVO AS MAT_PLATIVO
+              mat.PLATIVO AS MAT_PLATIVO,
+              CASE WHEN EXISTS (
+                SELECT 1 FROM SPSOPCAOINSCRITO o
+                 WHERE o.CODCOLIGADA = i.CODCOLIGADA AND o.IDPS = i.IDPS
+                   AND o.NUMEROINSCRICAO = i.NUMEROINSCRICAO
+                   AND o.STATUS IN (5, 7)
+              ) THEN 1 ELSE 0 END AS EM_CHAMADA
          FROM SPSINSCRICAOAREAOFERTADA i
          JOIN SPSPROCESSOSELETIVO ps ON ps.CODCOLIGADA = i.CODCOLIGADA AND ps.IDPS = i.IDPS
          JOIN SPSUSUARIO u ON u.CODUSUARIOPS = i.CODUSUARIOPS
@@ -309,9 +338,20 @@ export async function conciliarFunilCrm(
         if (insc.STATUSLAN === 0) {
           subject = `Ligar para ${insc.CANDIDATO} - Taxa de R$200 não paga`;
           notes = `Inscrição #${insc.NUMEROINSCRICAO}: taxa gerada, ainda sem pagamento.`;
-        } else if (insc.STATUSLAN === 1 && insc.RESERVA_STATUS === null && !insc.RAMAT) {
+        } else if (
+          insc.STATUSLAN === 1 &&
+          insc.RESERVA_STATUS === null &&
+          !insc.RAMAT &&
+          insc.EM_CHAMADA === 1
+        ) {
+          // Só incentiva a matrícula quando o candidato está EM CHAMADA (apto a
+          // matricular agora). Antes, a tarefa era criada só com a taxa paga — o
+          // que gerava tarefas vencidas para quem ainda aguarda prova/entrevista
+          // (ex.: 8º/9º ano, Ensino Médio), pois a reserva nem está liberada. O 1º
+          // ano do Fundamental (maioria, sem prova) entra em chamada logo após a
+          // taxa, então segue recebendo o incentivo normalmente.
           subject = `Incentivar Matrícula de ${insc.CANDIDATO} (R$2.200)`;
-          notes = `Inscrição #${insc.NUMEROINSCRICAO}: taxa paga, reserva de matrícula ainda não gerada.`;
+          notes = `Inscrição #${insc.NUMEROINSCRICAO}: taxa paga e em chamada; reserva de matrícula ainda não gerada.`;
         }
 
         if (subject) {
@@ -322,6 +362,43 @@ export async function conciliarFunilCrm(
             if (await criarTarefaCrm(dealInscricao.id, subject, notes)) {
               base.tarefasCriadas++;
               log("tarefa_followup", `Tarefa criada: "${subject}"`, dealInscricao.id);
+            } else {
+              base.falhas++;
+            }
+          }
+        }
+
+        // Limpeza: remove tarefas "Incentivar Matrícula" PREMATURAS — criadas antes
+        // de o candidato entrar em chamada (ex.: 8º/9º ano e Ensino Médio, que ainda
+        // aguardam prova/entrevista). É o inverso exato do gate de criação acima.
+        // Excluímos (deletarTarefa), não concluímos, para não inflar o relatório de
+        // tarefas concluídas com um incentivo que nunca foi feito. Idempotente:
+        // uma vez removida, não é recriada (o gate impede) nem há o que remover.
+        if (
+          insc.STATUSLAN === 1 &&
+          insc.RESERVA_STATUS === null &&
+          !insc.RAMAT &&
+          insc.EM_CHAMADA !== 1
+        ) {
+          const abertas = await listarTarefasAbertasDoDeal(dealInscricao.id);
+          const prematuras = abertas.filter((t) =>
+            t.subject.startsWith(INCENTIVO_SUBJECT_PREFIX),
+          );
+          for (const t of prematuras) {
+            if (dryRun) {
+              log(
+                "incentivo_removido",
+                `[dry-run] Excluiria tarefa prematura "${t.subject}" (inscrição #${insc.NUMEROINSCRICAO}: taxa paga, ainda não em chamada).`,
+                dealInscricao.id,
+              );
+              base.tarefasIncentivoRemovidas++;
+            } else if (await deletarTarefa(t.id)) {
+              base.tarefasIncentivoRemovidas++;
+              log(
+                "incentivo_removido",
+                `Tarefa prematura excluída: "${t.subject}" (inscrição #${insc.NUMEROINSCRICAO}).`,
+                dealInscricao.id,
+              );
             } else {
               base.falhas++;
             }
