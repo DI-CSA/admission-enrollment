@@ -37,7 +37,6 @@ import {
   marcarNegociacaoGanha,
   listarTarefasAbertasDoDeal,
   concluirTarefa,
-  deletarTarefa,
   atualizarContexto360Deal,
   extrairIdVisitaDoNome,
   type NegociacaoCrm,
@@ -53,23 +52,13 @@ export interface ResultadoConciliacaoFunil {
   tagsAtualizadas: number;
   contextosAtualizados: number;
   tarefasCriadas: number;
-  /** Tarefas "Incentivar Matrícula" prematuras removidas (candidato ainda não em chamada). */
-  tarefasIncentivoRemovidas: number;
   falhas: number;
   logs: Array<{
-    tipo:
-      | "zero_zombie"
-      | "contexto_360"
-      | "tarefa_followup"
-      | "incentivo_removido"
-      | "identidade_duvidosa";
+    tipo: "zero_zombie" | "contexto_360" | "tarefa_followup" | "identidade_duvidosa";
     mensagem: string;
     dealId?: string;
   }>;
 }
-
-/** Prefixo do assunto das tarefas de incentivo à matrícula (para localizá-las). */
-const INCENTIVO_SUBJECT_PREFIX = "Incentivar Matrícula de ";
 
 interface VisitaAgos {
   id: string;
@@ -141,7 +130,6 @@ export async function conciliarFunilCrm(
     tagsAtualizadas: 0,
     contextosAtualizados: 0,
     tarefasCriadas: 0,
-    tarefasIncentivoRemovidas: 0,
     falhas: 0,
     logs: [],
   };
@@ -368,42 +356,12 @@ export async function conciliarFunilCrm(
           }
         }
 
-        // Limpeza: remove tarefas "Incentivar Matrícula" PREMATURAS — criadas antes
-        // de o candidato entrar em chamada (ex.: 8º/9º ano e Ensino Médio, que ainda
-        // aguardam prova/entrevista). É o inverso exato do gate de criação acima.
-        // Excluímos (deletarTarefa), não concluímos, para não inflar o relatório de
-        // tarefas concluídas com um incentivo que nunca foi feito. Idempotente:
-        // uma vez removida, não é recriada (o gate impede) nem há o que remover.
-        if (
-          insc.STATUSLAN === 1 &&
-          insc.RESERVA_STATUS === null &&
-          !insc.RAMAT &&
-          insc.EM_CHAMADA !== 1
-        ) {
-          const abertas = await listarTarefasAbertasDoDeal(dealInscricao.id);
-          const prematuras = abertas.filter((t) =>
-            t.subject.startsWith(INCENTIVO_SUBJECT_PREFIX),
-          );
-          for (const t of prematuras) {
-            if (dryRun) {
-              log(
-                "incentivo_removido",
-                `[dry-run] Excluiria tarefa prematura "${t.subject}" (inscrição #${insc.NUMEROINSCRICAO}: taxa paga, ainda não em chamada).`,
-                dealInscricao.id,
-              );
-              base.tarefasIncentivoRemovidas++;
-            } else if (await deletarTarefa(t.id)) {
-              base.tarefasIncentivoRemovidas++;
-              log(
-                "incentivo_removido",
-                `Tarefa prematura excluída: "${t.subject}" (inscrição #${insc.NUMEROINSCRICAO}).`,
-                dealInscricao.id,
-              );
-            } else {
-              base.falhas++;
-            }
-          }
-        }
+        // NOTA: as tarefas "Incentivar Matrícula" prematuras (criadas antes de o
+        // candidato entrar em chamada) NÃO são removidas por aqui — a API do RD CRM
+        // v1 não expõe exclusão de tarefas (só create/get/list/update; ver
+        // developers.rdstation.com/reference). A limpeza pontual dessas tarefas é
+        // feita manualmente na interface do RD CRM. O gate acima impede que novas
+        // tarefas prematuras sejam criadas.
       } else if (!visitaCorrespondente && insc.IDLAN && dealInscricao) {
         // Caso 2 do plano: inscrição sem visita correspondente encontrada.
         if (dryRun) {

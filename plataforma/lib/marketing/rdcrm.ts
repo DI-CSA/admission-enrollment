@@ -1295,31 +1295,10 @@ export async function concluirTarefa(taskId: string): Promise<boolean> {
   }
 }
 
-/**
- * Exclui uma tarefa (DELETE /tasks/{id}) do RD CRM v1. Usada para remover tarefas
- * criadas por engano — ex.: "Incentivar Matrícula" gerada antes de o candidato
- * entrar em chamada. Preferimos EXCLUIR (e não concluir) para não inflar o
- * relatório de "tarefas concluídas" com trabalho que nunca ocorreu. Nunca lança:
- * em falha retorna false.
- */
-export async function deletarTarefa(taskId: string): Promise<boolean> {
-  const token = process.env.RD_CRM_TOKEN;
-  if (!token || !taskId) return false;
-  try {
-    const res = await rdFetch(
-      `${RD_CRM_BASE}/tasks/${encodeURIComponent(taskId)}?token=${encodeURIComponent(token)}`,
-      { method: "DELETE", headers: { Accept: "application/json" } },
-    );
-    if (!res.ok) {
-      console.warn("[rdcrm] deletar tarefa não-OK:", res.status, taskId);
-      return false;
-    }
-    return true;
-  } catch (e) {
-    console.warn("[rdcrm] falha ao deletar tarefa:", taskId, e);
-    return false;
-  }
-}
+// NOTA: a API do RD CRM v1 NÃO expõe exclusão de tarefas — os únicos endpoints de
+// tarefa são create/get/list/update (ver developers.rdstation.com/reference; os
+// únicos DELETE da API são custom-field, product-from-deal e webhook). Por isso não
+// há `deletarTarefa`: tarefas criadas por engano são removidas manualmente na UI.
 
 // ---------------------------------------------------------------------------
 // Contexto 360º — status consolidado do funil no card de Inscrição/Matrícula
