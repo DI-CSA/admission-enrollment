@@ -37,6 +37,7 @@ import {
   marcarNegociacaoGanha,
   listarTarefasAbertasDoDeal,
   concluirTarefa,
+  reagendarTarefa,
   atualizarContexto360Deal,
   extrairIdVisitaDoNome,
   type NegociacaoCrm,
@@ -52,13 +53,37 @@ export interface ResultadoConciliacaoFunil {
   tagsAtualizadas: number;
   contextosAtualizados: number;
   tarefasCriadas: number;
+  /** Tarefas "Incentivar Matrícula" adiadas (candidato ainda não em chamada). */
+  tarefasIncentivoAdiadas: number;
+  /** Tarefas "Incentivar Matrícula" ativadas (data puxada p/ hoje ao entrar em chamada). */
+  tarefasIncentivoAtivadas: number;
   falhas: number;
   logs: Array<{
-    tipo: "zero_zombie" | "contexto_360" | "tarefa_followup" | "identidade_duvidosa";
+    tipo:
+      | "zero_zombie"
+      | "contexto_360"
+      | "tarefa_followup"
+      | "incentivo_adiado"
+      | "incentivo_ativado"
+      | "identidade_duvidosa";
     mensagem: string;
     dealId?: string;
   }>;
 }
+
+/** Prefixo do assunto das tarefas de incentivo à matrícula (para localizá-las). */
+const INCENTIVO_SUBJECT_PREFIX = "Incentivar Matrícula de ";
+
+/**
+ * Data-estacionamento para onde as tarefas "Incentivar Matrícula" prematuras são
+ * ADIADAS enquanto o candidato não está em chamada. Padrão: 02/10/2026 — a data de
+ * divulgação dos resultados, quando o "em chamada" é ajustado. Assim a tarefa
+ * ressurge na fila exatamente quando passa a fazer sentido (e o motor, se estiver
+ * rodando, já a terá ativado antes disso ao detectar a chamada). Configurável por
+ * env para ciclos futuros. Formato "YYYY-MM-DD".
+ */
+const INCENTIVO_PARK_DATE =
+  process.env.CONCILIAR_INCENTIVO_PARK_DATE?.trim() || "2026-10-02";
 
 interface VisitaAgos {
   id: string;
@@ -130,6 +155,8 @@ export async function conciliarFunilCrm(
     tagsAtualizadas: 0,
     contextosAtualizados: 0,
     tarefasCriadas: 0,
+    tarefasIncentivoAdiadas: 0,
+    tarefasIncentivoAtivadas: 0,
     falhas: 0,
     logs: [],
   };
@@ -321,28 +348,10 @@ export async function conciliarFunilCrm(
           }
         }
 
-        let subject: string | null = null;
-        let notes = "";
+        // Follow-up "Ligar - taxa não paga": criação simples e idempotente.
         if (insc.STATUSLAN === 0) {
-          subject = `Ligar para ${insc.CANDIDATO} - Taxa de R$200 não paga`;
-          notes = `Inscrição #${insc.NUMEROINSCRICAO}: taxa gerada, ainda sem pagamento.`;
-        } else if (
-          insc.STATUSLAN === 1 &&
-          insc.RESERVA_STATUS === null &&
-          !insc.RAMAT &&
-          insc.EM_CHAMADA === 1
-        ) {
-          // Só incentiva a matrícula quando o candidato está EM CHAMADA (apto a
-          // matricular agora). Antes, a tarefa era criada só com a taxa paga — o
-          // que gerava tarefas vencidas para quem ainda aguarda prova/entrevista
-          // (ex.: 8º/9º ano, Ensino Médio), pois a reserva nem está liberada. O 1º
-          // ano do Fundamental (maioria, sem prova) entra em chamada logo após a
-          // taxa, então segue recebendo o incentivo normalmente.
-          subject = `Incentivar Matrícula de ${insc.CANDIDATO} (R$2.200)`;
-          notes = `Inscrição #${insc.NUMEROINSCRICAO}: taxa paga e em chamada; reserva de matrícula ainda não gerada.`;
-        }
-
-        if (subject) {
+          const subject = `Ligar para ${insc.CANDIDATO} - Taxa de R$200 não paga`;
+          const notes = `Inscrição #${insc.NUMEROINSCRICAO}: taxa gerada, ainda sem pagamento.`;
           if (dryRun) {
             log("tarefa_followup", `[dry-run] Criaria tarefa: "${subject}"`, dealInscricao.id);
             base.tarefasCriadas++;
@@ -356,12 +365,86 @@ export async function conciliarFunilCrm(
           }
         }
 
-        // NOTA: as tarefas "Incentivar Matrícula" prematuras (criadas antes de o
-        // candidato entrar em chamada) NÃO são removidas por aqui — a API do RD CRM
-        // v1 não expõe exclusão de tarefas (só create/get/list/update; ver
-        // developers.rdstation.com/reference). A limpeza pontual dessas tarefas é
-        // feita manualmente na interface do RD CRM. O gate acima impede que novas
-        // tarefas prematuras sejam criadas.
+        // "Incentivar Matrícula" GERENCIADA pela data conforme o sinal "em chamada".
+        // A API do RD CRM v1 não exclui tarefas; então, em vez de criar-e-apagar,
+        // controlamos a DATA da tarefa:
+        //  • EM CHAMADA  → garante 1 tarefa ATIVA (data = hoje): cria se não houver;
+        //                  se estiver adiada, puxa a data de volta; estaciona extras.
+        //  • FORA da chamada → ADIA a(s) tarefa(s) para INCENTIVO_PARK_DATE, tirando-a
+        //                  da fila sem marcá-la como concluída (não infla relatório).
+        // É o motor que ativa/adia — não dá para resolver com um adiamento único,
+        // pois o dedup de criação suprimiria a nova tarefa quando a chamada saísse.
+        if (insc.STATUSLAN === 1 && insc.RESERVA_STATUS === null && !insc.RAMAT) {
+          const subjectIncentivo = `Incentivar Matrícula de ${insc.CANDIDATO} (R$2.200)`;
+          const abertas = (await listarTarefasAbertasDoDeal(dealInscricao.id)).filter(
+            (t) => t.subject.startsWith(INCENTIVO_SUBJECT_PREFIX),
+          );
+          const hoje = new Date().toISOString().slice(0, 10);
+          const dataDe = (t: (typeof abertas)[number]) => (t.date ?? "").slice(0, 10);
+
+          if (insc.EM_CHAMADA === 1) {
+            if (abertas.length === 0) {
+              const notes = `Inscrição #${insc.NUMEROINSCRICAO}: taxa paga e em chamada; reserva de matrícula ainda não gerada.`;
+              if (dryRun) {
+                log("tarefa_followup", `[dry-run] Criaria tarefa: "${subjectIncentivo}"`, dealInscricao.id);
+                base.tarefasCriadas++;
+              } else if (await criarTarefaCrm(dealInscricao.id, subjectIncentivo, notes, hoje)) {
+                base.tarefasCriadas++;
+                log("tarefa_followup", `Tarefa criada: "${subjectIncentivo}"`, dealInscricao.id);
+              } else {
+                base.falhas++;
+              }
+            } else {
+              // Ativa a 1ª (se estiver adiada no futuro); estaciona as demais (duplicatas).
+              const [principal, ...extras] = abertas;
+              if (dataDe(principal) > hoje) {
+                if (dryRun) {
+                  log("incentivo_ativado", `[dry-run] Ativaria tarefa (data→hoje) de #${insc.NUMEROINSCRICAO} (em chamada).`, dealInscricao.id);
+                  base.tarefasIncentivoAtivadas++;
+                } else if (await reagendarTarefa(principal.id, hoje)) {
+                  base.tarefasIncentivoAtivadas++;
+                  log("incentivo_ativado", `Tarefa ativada (em chamada): "${principal.subject}".`, dealInscricao.id);
+                } else {
+                  base.falhas++;
+                }
+              }
+              for (const t of extras) {
+                if (dataDe(t) !== INCENTIVO_PARK_DATE) {
+                  if (dryRun) {
+                    log("incentivo_adiado", `[dry-run] Estacionaria tarefa duplicada de #${insc.NUMEROINSCRICAO}.`, dealInscricao.id);
+                    base.tarefasIncentivoAdiadas++;
+                  } else if (await reagendarTarefa(t.id, INCENTIVO_PARK_DATE, "Duplicata — adiada automaticamente.")) {
+                    base.tarefasIncentivoAdiadas++;
+                    log("incentivo_adiado", `Tarefa duplicada estacionada: "${t.subject}".`, dealInscricao.id);
+                  } else {
+                    base.falhas++;
+                  }
+                }
+              }
+            }
+          } else {
+            // Fora da chamada: adia todas as tarefas de incentivo abertas.
+            for (const t of abertas) {
+              if (dataDe(t) !== INCENTIVO_PARK_DATE) {
+                if (dryRun) {
+                  log("incentivo_adiado", `[dry-run] Adiaria tarefa "${t.subject}" para ${INCENTIVO_PARK_DATE} (#${insc.NUMEROINSCRICAO}: ainda não em chamada).`, dealInscricao.id);
+                  base.tarefasIncentivoAdiadas++;
+                } else if (
+                  await reagendarTarefa(
+                    t.id,
+                    INCENTIVO_PARK_DATE,
+                    "Adiada automaticamente — aguardando chamada/resultado do processo seletivo.",
+                  )
+                ) {
+                  base.tarefasIncentivoAdiadas++;
+                  log("incentivo_adiado", `Tarefa adiada p/ ${INCENTIVO_PARK_DATE}: "${t.subject}" (#${insc.NUMEROINSCRICAO}).`, dealInscricao.id);
+                } else {
+                  base.falhas++;
+                }
+              }
+            }
+          }
+        }
       } else if (!visitaCorrespondente && insc.IDLAN && dealInscricao) {
         // Caso 2 do plano: inscrição sem visita correspondente encontrada.
         if (dryRun) {

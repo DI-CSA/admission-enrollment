@@ -1227,6 +1227,8 @@ export async function marcarNegociacaoPerdida(dealId: string): Promise<boolean> 
 export interface TarefaAbertaCrm {
   id: string;
   subject: string;
+  /** Data da tarefa como o RD devolve (ISO datetime, ex.: "2027-12-31T13:00:00.000Z"). */
+  date: string | null;
 }
 
 /**
@@ -1259,6 +1261,7 @@ export async function listarTarefasAbertasDoDeal(dealId: string): Promise<Tarefa
       .map((t) => ({
         id: String(t.id ?? t._id ?? ""),
         subject: typeof t.subject === "string" ? t.subject : "",
+        date: typeof t.date === "string" ? t.date : null,
       }))
       .filter((t) => t.id);
   } catch (e) {
@@ -1295,10 +1298,46 @@ export async function concluirTarefa(taskId: string): Promise<boolean> {
   }
 }
 
-// NOTA: a API do RD CRM v1 NÃO expõe exclusão de tarefas — os únicos endpoints de
-// tarefa são create/get/list/update (ver developers.rdstation.com/reference; os
-// únicos DELETE da API são custom-field, product-from-deal e webhook). Por isso não
-// há `deletarTarefa`: tarefas criadas por engano são removidas manualmente na UI.
+/**
+ * Reagenda uma tarefa (PUT /tasks/{id}, altera `date`), opcionalmente atualizando
+ * as notas. É um UPDATE parcial (como `concluirTarefa`), então preserva assunto,
+ * responsáveis e demais campos.
+ *
+ * NOTA: a API do RD CRM v1 NÃO expõe exclusão de tarefas — os únicos endpoints de
+ * tarefa são create/get/list/update (ver developers.rdstation.com/reference; os
+ * únicos DELETE da API são custom-field, product-from-deal e webhook). Por isso, em
+ * vez de excluir tarefas prematuras, o motor de conciliação as ADIA (reagenda para
+ * uma data futura) — tirando-as da fila de trabalho sem marcá-las como concluídas
+ * (o que inflaria os relatórios). `date` no formato "YYYY-MM-DD". Nunca lança.
+ */
+export async function reagendarTarefa(
+  taskId: string,
+  date: string,
+  notes?: string,
+): Promise<boolean> {
+  const token = process.env.RD_CRM_TOKEN;
+  if (!token || !taskId || !date) return false;
+  try {
+    const res = await rdFetch(
+      `${RD_CRM_BASE}/tasks/${encodeURIComponent(taskId)}?token=${encodeURIComponent(token)}`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({
+          task: notes !== undefined ? { date, notes } : { date },
+        }),
+      },
+    );
+    if (!res.ok) {
+      console.warn("[rdcrm] reagendar tarefa não-OK:", res.status, taskId);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.warn("[rdcrm] falha ao reagendar tarefa:", taskId, e);
+    return false;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Contexto 360º — status consolidado do funil no card de Inscrição/Matrícula
