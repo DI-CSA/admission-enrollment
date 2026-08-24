@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Provisiona o cron de CONCILIAÇÃO DE PAGAMENTO na VM csa-portal01 (roda no Mac).
-# Instala /etc/cron.d/csa-conciliar: 2x/dia (08h e 18h, horário da VM = UTC) faz
-# um POST autenticado na rota /api/jobs/conciliar-pagamentos, lendo o CRON_SECRET
-# de /etc/csa-portal/.env. Idempotente: sobrescreve o arquivo do cron.
-# NÃO toca em /etc/csa-portal/.env (segredos ficam só na VM).
+# Provisiona os crons de CONCILIAÇÃO na VM csa-portal01 (roda no Mac).
+# Instala /etc/cron.d/csa-conciliar: pagamento (08h/18h), pré-matrícula (hora em
+# hora) e conciliação 360º do funil (hora em hora, dry-run por padrão — ver
+# docs/integracao_rd_station.md §8.4). Cada entrada faz um POST autenticado na
+# rota correspondente, lendo o CRON_SECRET de /etc/csa-portal/.env. Idempotente:
+# sobrescreve o arquivo do cron. NÃO toca em /etc/csa-portal/.env (segredos
+# ficam só na VM).
 set -euo pipefail
 
 PROJECT=totvs-iaas
@@ -20,8 +22,12 @@ cat > "$TMP" <<'CRON'
 # Conciliação de pagamento CSA: avança deals pagos p/ "Taxa paga" no RD CRM.
 SHELL=/bin/bash
 0 8,18 * * * root SECRET="$(sed -n 's/^CRON_SECRET=//p' /etc/csa-portal/.env | head -1)"; curl -fsS -X POST -H "x-cron-secret: $SECRET" http://127.0.0.1:3000/api/jobs/conciliar-pagamentos >> /var/log/csa-conciliar.log 2>&1
+# Conciliação de VISITAS CSA: cria/avança deals de visita (Agendada -> Realizada) no RD CRM.
+*/15 * * * * root SECRET="$(sed -n 's/^CRON_SECRET=//p' /etc/csa-portal/.env | head -1)"; curl -fsS -X POST -H "x-cron-secret: $SECRET" http://127.0.0.1:3000/api/jobs/conciliar-visitas >> /var/log/csa-conciliar.log 2>&1
 # Conciliação da PRÉ-MATRÍCULA CSA: avança deals p/ "Cadastro de matrícula" (reserva gerada) e "Pré-matrícula" (reserva paga).
 15 * * * * root SECRET="$(sed -n 's/^CRON_SECRET=//p' /etc/csa-portal/.env | head -1)"; curl -fsS -X POST -H "x-cron-secret: $SECRET" http://127.0.0.1:3000/api/jobs/conciliar-matriculas >> /var/log/csa-conciliar.log 2>&1
+# Conciliação 360º do funil CSA: Zero Zombie Deal + Contexto 360º. Dry-run por padrão (CONCILIAR_FUNIL_CRM_DRY_RUN em /etc/csa-portal/.env) — só loga, não escreve no RD CRM até ser explicitamente ligado.
+30 * * * * root SECRET="$(sed -n 's/^CRON_SECRET=//p' /etc/csa-portal/.env | head -1)"; curl -fsS -X POST -H "x-cron-secret: $SECRET" http://127.0.0.1:3000/api/jobs/conciliar-funil-crm >> /var/log/csa-conciliar.log 2>&1
 CRON
 
 echo "==> 1/2 envia o arquivo de cron para a VM"

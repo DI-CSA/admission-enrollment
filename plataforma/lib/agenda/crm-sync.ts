@@ -18,6 +18,10 @@ import {
   criarNegociacaoVisita,
   atualizarCamposVisitaDeal,
   extrairIdVisitaDoNome,
+  buscarDealInscricaoPorEmail,
+  mesclarVisitaNoDealDeInscricao,
+  marcarNegociacaoPerdida,
+  atualizarTagsDeal,
 } from "@/lib/marketing/rdcrm";
 import { registrarEventoFunil } from "@/lib/marketing/rdstation";
 
@@ -55,6 +59,10 @@ export interface ResultadoSyncVisitas {
   criados: number;
   avancados: number;
   atualizados: number;
+  /** Visitas mescladas num deal de INSCRIÇÃO já existente (fusão reversa — ver `buscarDealInscricaoPorEmail`). */
+  mesclados: number;
+  /** Cards de visita fechados como "perdido" por cancelamento do agendamento. */
+  cancelados: number;
   total: number;
 }
 
@@ -67,15 +75,42 @@ export async function sincronizarVisitasCrm(): Promise<ResultadoSyncVisitas> {
     !AGENDADA ||
     !REALIZADA
   ) {
-    return { habilitado: false, criados: 0, avancados: 0, atualizados: 0, total: 0 };
+    return {
+      habilitado: false,
+      criados: 0,
+      avancados: 0,
+      atualizados: 0,
+      mesclados: 0,
+      cancelados: 0,
+      total: 0,
+    };
   }
 
-  // Mapa token [VIS:<id>] -> deal existente no funil.
+  // Rede de segurança TEMPORÁRIA para as duas correções novas (fusão reversa +
+  // fechamento de cancelada): enquanto NOVOS_DRY_RUN não for explicitamente
+  // "false", esses dois caminhos apenas REGISTRAM no log em vez de gravar no RD.
+  // As gravações antigas (criar / avançar / atualizar) seguem normais. Fail-safe:
+  // ausente ⇒ dry-run. Remover este guard após validar os logs em produção.
+  const novosDryRun = process.env.VISITAS_SYNC_NOVOS_DRY_RUN !== "false";
+
+  // Mapa token [VIS:<id>] -> deal existente no funil. `fechado`/`temLan` alimentam
+  // o fechamento de cancelados abaixo: só fecha card de visita PURO (sem
+  // inscrição fundida) e ainda aberto — idempotente (a próxima leitura já vem
+  // com `fechado:true` e pula).
   const deals = await listarNegociacoesDoFunil();
-  const porVisita = new Map<string, { id: string; dealStageId: string | null }>();
+  const porVisita = new Map<
+    string,
+    { id: string; dealStageId: string | null; fechado: boolean; temLan: boolean }
+  >();
   for (const d of deals) {
     const vid = extrairIdVisitaDoNome(d.nome);
-    if (vid) porVisita.set(vid, { id: d.id, dealStageId: d.dealStageId });
+    if (vid)
+      porVisita.set(vid, {
+        id: d.id,
+        dealStageId: d.dealStageId,
+        fechado: d.fechado,
+        temLan: d.idLan != null,
+      });
   }
 
   // Sincroniza só o ciclo de admissão atual: visitas a partir de
@@ -117,6 +152,20 @@ export async function sincronizarVisitasCrm(): Promise<ResultadoSyncVisitas> {
     [desde],
   );
 
+  // Agendamentos CANCELADOS no mesmo período: não entram na sincronização normal
+  // acima (o SELECT principal exclui `status='cancelada'`), mas se já existe um
+  // card de visita PURO (sem inscrição fundida) e ainda aberto, ele precisa ser
+  // fechado como "perdido" — sem isso, fica parado no funil para sempre, sem
+  // ninguém nunca mais atualizá-lo (ver `marcarNegociacaoPerdida`).
+  const cancelados_ = await query<{ id: string }>(
+    `SELECT a.id
+       FROM visita_agendamento a
+       JOIN visita_slot s ON s.id = a.slot_id
+      WHERE a.status = 'cancelada'
+        AND s.inicio >= $1::timestamptz`,
+    [desde],
+  );
+
   // Espelha o comparecimento também no MARKETING (habilita automação pós-visita:
   // agradecimento + convite a se inscrever). Diferente do CRM, o Marketing não é
   // reconciliado, então disparamos EXATAMENTE na transição p/ realizada — a própria
@@ -143,6 +192,7 @@ export async function sincronizarVisitasCrm(): Promise<ResultadoSyncVisitas> {
   let criados = 0;
   let avancados = 0;
   let atualizados = 0;
+  let mesclados = 0;
   for (const b of bookings) {
     const existente = porVisita.get(b.id);
     const realizada = b.status === "realizada";
@@ -174,21 +224,44 @@ export async function sincronizarVisitasCrm(): Promise<ResultadoSyncVisitas> {
       origem: ORIGEM_LABEL_CRM[b.origem_contato] ?? b.origem_contato,
     };
     if (!existente) {
-      const id = await criarNegociacaoVisita({
-        agendamentoId: b.id,
-        nome: b.nome,
-        email: b.email,
-        telefone: b.telefone,
-        dealStageId: realizada ? REALIZADA : AGENDADA,
-        titulo,
-        sourceName,
-        ...dados,
-      });
-      if (id) {
-        criados++;
-        // Deal criado já em REALIZADA (visita compareceu antes de existir deal):
-        // é a transição p/ realizada — espelha no Marketing.
-        if (realizada) emitirVisitaRealizadaMkt(b);
+      // Fusão reversa: a pessoa pode já ter uma inscrição em andamento (deal
+      // com [LAN:]) e SÓ AGORA agendar a visita — `registrarNegociacaoInscricao`
+      // não cobre esse sentido (ela só procura uma visita ANTERIOR à inscrição).
+      // Sem isso, criaríamos um card de visita "órfão" que o Zero Zombie Deal
+      // teria que limpar depois; aqui evitamos o card duplicado desde a origem.
+      const alvo =
+        process.env.VISITAS_DEAL_UNICO === "true" && b.email
+          ? await buscarDealInscricaoPorEmail(b.email)
+          : null;
+      if (alvo) {
+        if (novosDryRun) {
+          console.log(
+            `[conciliar-visitas][dry-run] fusão reversa: visita ${b.id} → deal inscrição ${alvo.id} (${alvo.nome})`,
+          );
+        } else {
+          const ok = await mesclarVisitaNoDealDeInscricao(alvo.id, alvo.nome, b.id, dados);
+          if (ok) {
+            mesclados++;
+            if (realizada) emitirVisitaRealizadaMkt(b);
+          }
+        }
+      } else {
+        const id = await criarNegociacaoVisita({
+          agendamentoId: b.id,
+          nome: b.nome,
+          email: b.email,
+          telefone: b.telefone,
+          dealStageId: realizada ? REALIZADA : AGENDADA,
+          titulo,
+          sourceName,
+          ...dados,
+        });
+        if (id) {
+          criados++;
+          // Deal criado já em REALIZADA (visita compareceu antes de existir deal):
+          // é a transição p/ realizada — espelha no Marketing.
+          if (realizada) emitirVisitaRealizadaMkt(b);
+        }
       }
     } else {
       // Deal já existe: atualiza os campos (backfill + mantém "situação" em dia)
@@ -206,5 +279,30 @@ export async function sincronizarVisitasCrm(): Promise<ResultadoSyncVisitas> {
     }
   }
 
-  return { habilitado: true, criados, avancados, atualizados, total: bookings.length };
+  let cancelados = 0;
+  for (const c of cancelados_) {
+    const alvo = porVisita.get(c.id);
+    if (!alvo || alvo.fechado || alvo.temLan) continue; // já fechado, sem card, ou fundido numa inscrição (não mexe)
+    if (novosDryRun) {
+      console.log(
+        `[conciliar-visitas][dry-run] fechar cancelada: deal ${alvo.id} (visita ${c.id}) → perdido + tag visita-cancelada`,
+      );
+      continue;
+    }
+    const [ok] = await Promise.all([
+      marcarNegociacaoPerdida(alvo.id),
+      atualizarTagsDeal(alvo.id, ["visita-cancelada"]),
+    ]);
+    if (ok) cancelados++;
+  }
+
+  return {
+    habilitado: true,
+    criados,
+    avancados,
+    atualizados,
+    mesclados,
+    cancelados,
+    total: bookings.length,
+  };
 }

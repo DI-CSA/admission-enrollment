@@ -262,13 +262,12 @@ curl -fsS -X POST -H "x-cron-secret: $SECRET" \
   "http://127.0.0.1:3000/api/jobs/conciliar-matriculas?dry=1"
 ```
 
-> **Pendente:** `scripts/prov-conciliar-cron.sh` só agenda `conciliar-pagamentos` e
-> `conciliar-matriculas` acima. Dois jobs existem no código mas **ainda não têm entrada em
-> `/etc/cron.d/csa-conciliar`**: `conciliar-visitas` (sincroniza deals de visita — sugestão:
-> a cada 15 min) e `conciliar-funil-crm` (Zero Zombie Deal + Contexto 360º — protegido por
-> `CONCILIAR_FUNIL_CRM_DRY_RUN`, falha segura). Ver
-> [integracao_rd_station.md](integracao_rd_station.md) §8.3/§8.4 antes de agendar o segundo
-> (validar dry-run primeiro).
+> **Desde 2026-08-21**, `scripts/prov-conciliar-cron.sh` agenda os quatro jobs:
+> `conciliar-pagamentos` (08h/18h), `conciliar-visitas` (a cada 15 min — escreve de
+> verdade, sem dry-run), `conciliar-matriculas` (`:15` de cada hora) e `conciliar-funil-crm`
+> (`:30` de cada hora, **em dry-run** — `CONCILIAR_FUNIL_CRM_DRY_RUN` ainda não foi virada
+> para `"false"`; revisar `/var/log/csa-conciliar.log` antes de ligar a escrita). Ver
+> [integracao_rd_station.md](integracao_rd_station.md) §8.3/§8.4.
 
 A conciliação de matrícula interpreta o boleto de reserva de **R$ 2.200**:
 

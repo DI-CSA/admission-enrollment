@@ -23,8 +23,8 @@
 | **CRM — funil de pré-matrícula (reserva R$2.200)** | ✅ **Ativo** | cron horário move p/ *Cadastro de matrícula* / *Pré-matrícula* |
 | **CRM — etapa *Matriculado* (matrícula ativa no RM)** | ⚙️ **Pronto — aguarda config** | 3º ramo do mesmo cron: `SSTATUS.PLATIVO='S'` → *Matriculado* + evento `matricula-confirmada`. Ativa ao mapear `RD_CRM_DEAL_STAGE_MATRICULADO_ID`; sem ela, no-op (§8.2) |
 | **Agendador de visitas → Marketing + CRM** | ✅ **Ativo** | evento `visita-agendada` + deal de visita + **deal único** (visita→inscrição) |
-| **Cron de sincronização de visitas** (`/api/jobs/conciliar-visitas`) | 🚧 **Código pronto — não agendado** | rota existe e funciona; falta entrada em `scripts/prov-conciliar-cron.sh` (§8.3) |
-| **Zero Zombie Deal + Contexto 360º** (`/api/jobs/conciliar-funil-crm`) | 🚧 **Implementado — aguarda validação e agendamento** | dry-run por padrão (`CONCILIAR_FUNIL_CRM_DRY_RUN`); fecha cards de visita órfãos, enriquece o card de inscrição/matrícula, cria tarefas de follow-up (§8.4) |
+| **Cron de sincronização de visitas** (`/api/jobs/conciliar-visitas`) | ✅ **Agendado (2026-08-21)** | a cada 15 min, via `scripts/prov-conciliar-cron.sh` (§8.3) |
+| **Zero Zombie Deal + Contexto 360º** (`/api/jobs/conciliar-funil-crm`) | ⚙️ **Agendado em dry-run** | roda a cada hora (`:30`) só logando o que faria — `CONCILIAR_FUNIL_CRM_DRY_RUN` ainda não foi virado para `"false"`; validar os logs de produção antes de ligar a escrita (§8.4) |
 | **Meta CAPI (visita)** | ✅ **Ativo** | evento `Schedule` sob consentimento |
 | **Google Ads — conversão "Inscrição Concluída"** | ✅ **Ativo** | client-side (gtag), sob consentimento de marketing |
 | **Rastreamento de origem (loader RD + UTM + gclid)** | ✅ **Ativo** | `client_tracking_id` do cookie `__trf.src` |
@@ -452,13 +452,10 @@ Inscrição"`).
 Quatro jobs idempotentes e não-bloqueantes, todos protegidos por `x-cron-secret:
 $CRON_SECRET` (comparação em tempo constante; sem o segredo a rota fica 503/401).
 
-> **⚠️ Nem todos estão agendados de fato.** Só `conciliar-pagamentos` e
-> `conciliar-matriculas` têm entrada real em `/etc/cron.d/csa-conciliar` (instalado por
-> `scripts/prov-conciliar-cron.sh`, rodado na VM `csa-portal01`). `conciliar-visitas` e
-> `conciliar-funil-crm` (§8.3/§8.4) **existem no código mas não estão agendados** — hoje só
-> rodam via chamada manual (`force-sync.ts`/`test-dryrun.ts`) ou disparo manual do cron.
-> Adicionar as duas entradas faltantes em `scripts/prov-conciliar-cron.sh` é um pendente
-> conhecido (ver `docs/plano_deploy_gcp.md`).
+> **Desde 2026-08-21, os quatro estão agendados** em `/etc/cron.d/csa-conciliar`
+> (`scripts/prov-conciliar-cron.sh`, VM `csa-portal01`): `conciliar-pagamentos` (08h/18h),
+> `conciliar-visitas` (a cada 15 min), `conciliar-matriculas` (hora em hora, `:15`) e
+> `conciliar-funil-crm` (hora em hora, `:30`, **em dry-run** — ver §8.4).
 
 ### 8.1 Conciliação da **taxa de inscrição** (`/api/jobs/conciliar-pagamentos`)
 
@@ -516,9 +513,28 @@ evento de Marketing `visita-realizada` (habilita a automação pós-visita — �
 "chamada" na AGOS é apenas um `UPDATE` de status no banco compartilhado; **todo o
 espelhamento RD (CRM + Marketing) acontece aqui, no hotsite**, a partir desse banco.
 
-> **Pendente:** apesar do nome sugerir cron, **não há entrada agendada** para esta rota em
-> `scripts/prov-conciliar-cron.sh` (ver aviso no topo da §8). Sugestão de frequência (o
-> próprio código comenta isso): a cada 15 minutos.
+**Cron:** a cada 15 minutos (`*/15 * * * *`), desde 2026-08-21 — sem proteção de dry-run
+(diferente do §8.4): cada execução já cria/avança deals de visita de verdade no RD CRM.
+
+**Fusão reversa (2026-08-24):** `registrarNegociacaoInscricao` (§6.3) só cobre o sentido
+visita→inscrição (a inscrição procura uma visita ANTERIOR). Quando a ordem é invertida — a
+família já tinha se inscrito e só depois agenda a visita —, nada verificava o sentido
+contrário, e um card de visita "órfão" era criado (que o Zero Zombie Deal, §8.4, teria que
+limpar depois). Agora, antes de criar um card de visita novo, o job procura um deal de
+inscrição aberto pelo mesmo e-mail (`buscarDealInscricaoPorEmail`, gate
+`VISITAS_DEAL_UNICO=true`) e, se achar, mescla a visita nesse card
+(`mesclarVisitaNoDealDeInscricao`: acrescenta o token `[VIS:]` ao nome + grava os campos
+personalizados da visita) em vez de criar um segundo card.
+
+**Fechamento de canceladas (2026-08-24):** agendamentos cancelados (`status='cancelada'`) na
+AGOS ficavam fora da sincronização normal (o `SELECT` principal já os excluía) — se já havia
+um card de visita aberto no RD, ele nunca mais era tocado (nem fechado, nem marcado como
+perdido), independentemente de quantos ciclos do cron rodassem depois. Agora o job também lê
+os cancelados do mesmo período e, quando o card de visita ainda está aberto **e não foi
+fundido numa inscrição** (sem token `[LAN:]` — um card já fundido representa uma família
+ativa no funil, não deve ser tocado por causa do cancelamento da visita), fecha como
+`win: false` + tag `visita-cancelada` (`marcarNegociacaoPerdida`). Idempotente: a próxima
+leitura já vem com o deal `fechado:true` e pula.
 
 ### 8.4 Conciliação 360º do funil (`/api/jobs/conciliar-funil-crm`) — novo
 
@@ -565,8 +581,24 @@ Implementação: `lib/marketing/conciliar-funil-crm.ts` (orquestração) +
 `concluirTarefa`, `atualizarContexto360Deal`, além de `atualizarTagsDeal`, já existente e
 até então também não documentado aqui).
 
-> **Pendente:** ainda não agendado (ver aviso no topo da §8) e ainda não validado com
-> dry-run real contra dados de produção.
+> **Validado em produção (2026-08-21 → 2026-08-24, dry-run):** a 1ª execução real via cron
+> (71 zumbis) misturava processos/anos antigos — a query de inscrições não filtrava por
+> ciclo (`SPSINSCRICAOAREAOFERTADA` acumula linhas de todos os PS/anos já rodados). Corrigido
+> com `JOIN SPSPROCESSOSELETIVO` + `WHERE ps.NOME LIKE @ano` (mesmo padrão de
+> `listarInscricoesPagasParaConciliar`). Depois da correção: 56 zumbis únicos no ciclo 2027.
+> **Causa raiz investigada em 5 amostras direto no RD CRM** (comparando e-mail e data de
+> criação do card de visita vs. o de inscrição): 4/5 por e-mail divergente entre quem agendou
+> a visita e quem fez a inscrição (cenário real, não é bug); 1/5 por ordem invertida (inscrição
+> antes da visita) — motivou a fusão reversa documentada acima. **Conclusão:** os zumbis
+> restantes são reais e corretamente identificados — o job cumpre o papel de rede de
+> segurança. **Corrigido também:** contagem duplicada quando duas inscrições (irmãos)
+> casam com o mesmo e-mail de responsável e, portanto, com o mesmo card de visita (agora só
+> conta/fecha uma vez por execução). **Pendente:** decidir quando virar
+> `CONCILIAR_FUNIL_CRM_DRY_RUN=false` — recomenda-se rodar mais alguns ciclos e olhar os
+> logs antes. **Inconsistência conhecida (não corrigida):** em dry-run, `contextosAtualizados`
+> fica sempre 0 (só conta escrita real), diferente de `dealsEncerrados`/`tarefasCriadas`
+> (contam também o que *seria* feito) — o array `logs` sempre tem o detalhe completo,
+> independente disso.
 
 ### 8.5 Disparo local (on-demand, do Mac)
 
@@ -731,7 +763,7 @@ atividades/tarefas.
 | --- | --- |
 | `lib/marketing/rdstation.ts` | `registrarEventoFunil()`, type `EtapaFunil`, custom fields `cf_*`, atribuição |
 | `lib/marketing/retry.ts` | `fetchComRetentativa()` — retry com backoff em 429/5xx (usado no Marketing) |
-| `lib/marketing/rdcrm.ts` | Deals: `registrarNegociacaoInscricao`, `criarNegociacaoVisita`, `mover…`, `ajustarValorReservaDeal`, `atualizar…`, `buscarDealVisitaPorEmail`, `listarNegociacoesDoFunil`; tokens `[LAN:]`/`[VIS:]`; tarefas/tags/encerramento: `criarTarefaCrm`, `atualizarTagsDeal`, `marcarNegociacaoGanha`, `listarTarefasAbertasDoDeal`, `concluirTarefa`, `atualizarContexto360Deal` (§8.4) |
+| `lib/marketing/rdcrm.ts` | Deals: `registrarNegociacaoInscricao`, `criarNegociacaoVisita`, `mover…`, `ajustarValorReservaDeal`, `atualizar…`, `buscarDealVisitaPorEmail`, `buscarDealInscricaoPorEmail` (fusão reversa, §8.3), `mesclarVisitaNoDealDeInscricao` (§8.3), `listarNegociacoesDoFunil`; tokens `[LAN:]`/`[VIS:]`; tarefas/tags/encerramento: `criarTarefaCrm`, `atualizarTagsDeal`, `marcarNegociacaoGanha`, `marcarNegociacaoPerdida` (§8.3), `listarTarefasAbertasDoDeal`, `concluirTarefa`, `atualizarContexto360Deal` (§8.4) |
 | `lib/marketing/origem.ts` | `extrairOrigem(req)` — cookie `__trf.src` + UTMs + gclid/wbraid/gbraid |
 | `lib/marketing/conciliar-matriculas.ts` | Núcleo da conciliação de pré-matrícula (cron + commit) |
 | `lib/marketing/conciliar-funil-crm.ts` | Núcleo da conciliação 360º do funil (§8.4) — Zero Zombie Deal + Contexto 360º |
@@ -748,8 +780,8 @@ atividades/tarefas.
 | `app/api/visitas/route.ts` | agendamento → `visita-agendada` + Meta |
 | `app/api/jobs/conciliar-pagamentos/route.ts` | cron — taxa paga → *Taxa paga* + `pagamento-confirmado` |
 | `app/api/jobs/conciliar-matriculas/route.ts` | cron — reserva → *Cadastro/Pré-matrícula* |
-| `app/api/jobs/conciliar-visitas/route.ts` | job — sincroniza deals de visita (**não agendado**, ver §8.3) |
-| `app/api/jobs/conciliar-funil-crm/route.ts` | job — Zero Zombie Deal + Contexto 360º (**não agendado**, ver §8.4) |
+| `app/api/jobs/conciliar-visitas/route.ts` | job — sincroniza deals de visita (agendado a cada 15 min, ver §8.3) |
+| `app/api/jobs/conciliar-funil-crm/route.ts` | job — Zero Zombie Deal + Contexto 360º (agendado em dry-run, ver §8.4) |
 | *(a criar)* `app/api/lead/route.ts` | evento `lead-captado` (formulário de interesse) — **não existe** |
 
 ### Variáveis de ambiente (todas em `.env.local` / `/etc/csa-portal/.env`)

@@ -44,6 +44,7 @@ import {
 import { SITUACAO_LABEL } from "@/lib/agenda/crm-sync";
 import { query as queryAgos } from "@/lib/agenda/db";
 import { query as queryTotvs } from "@/lib/totvs/db";
+import { ANO_PROCESSO } from "@/lib/processos";
 
 export interface ResultadoConciliacaoFunil {
   dealsEncerrados: number;
@@ -160,6 +161,12 @@ export async function conciliarFunilCrm(
     );
 
     // 3. Inscrições no TOTVS (com status financeiro/acadêmico do responsável).
+    // Filtra pelo ciclo atual (ps.NOME LIKE @ano) — SPSINSCRICAOAREAOFERTADA
+    // acumula linhas de TODOS os PS/anos já rodados (não há coluna de período
+    // letivo na tabela); sem esse filtro, o casamento por e-mail do
+    // responsável cruza irmãos/reinscrições de ciclos diferentes e infla os
+    // resultados (mesmo padrão de `listarInscricoesPagasParaConciliar`).
+    const anoAtual = process.env.PS_ANO_ATUAL?.trim() || String(ANO_PROCESSO);
     const inscricoes = await queryTotvs<InscricaoTotvs>(
       `SELECT i.NUMEROINSCRICAO, i.IDLAN, i.RAMAT, u.NOME AS CANDIDATO,
               resp.EMAIL AS RESP_EMAIL, resp.CPF AS RESP_CPF,
@@ -167,6 +174,7 @@ export async function conciliarFunilCrm(
               res.STATUSLAN AS RESERVA_STATUS,
               mat.PLATIVO AS MAT_PLATIVO
          FROM SPSINSCRICAOAREAOFERTADA i
+         JOIN SPSPROCESSOSELETIVO ps ON ps.CODCOLIGADA = i.CODCOLIGADA AND ps.IDPS = i.IDPS
          JOIN SPSUSUARIO u ON u.CODUSUARIOPS = i.CODUSUARIOPS
          OUTER APPLY (
            SELECT TOP 1 ru.EMAIL, ru.CPF FROM SPSUSUARIOTIPORELAC r
@@ -186,10 +194,17 @@ export async function conciliarFunilCrm(
            SELECT TOP 1 m.CODSTATUS, ss.PLATIVO FROM SMATRICPL m
            LEFT JOIN SSTATUS ss ON ss.CODCOLIGADA = m.CODCOLIGADA AND ss.CODSTATUS = m.CODSTATUS
            WHERE m.CODCOLIGADA = i.CODCOLIGADA AND m.RA = i.RAMAT
-         ) mat`,
+         ) mat
+        WHERE ps.NOME LIKE @ano`,
+      { ano: `%${anoAtual}%` },
     );
 
     // 4. Cruzamento e resolução.
+    // Duas inscrições (irmãos) podem casar com o MESMO e-mail de responsável e,
+    // portanto, com o MESMO dealVisita — sem este controle, o zumbi seria
+    // fechado/contado uma vez por irmão (idempotente na escrita, mas infla
+    // dealsEncerrados/tagsAtualizadas no resultado).
+    const visitasJaFechadasNesteRun = new Set<string>();
     for (const insc of inscricoes) {
       const emailResp = insc.RESP_EMAIL?.toLowerCase().trim();
       const dealInscricao = insc.IDLAN ? dealsInscricao.get(String(insc.IDLAN)) : null;
@@ -203,7 +218,13 @@ export async function conciliarFunilCrm(
       // --- 4.1 Zero Zombie Deal ---------------------------------------------
       // Só fecha se for um deal DIFERENTE do de inscrição (senão é o próprio
       // card único, já em andamento — não deve ser tocado).
-      if (dealVisita && !dealVisita.fechado && dealVisita.id !== dealInscricao?.id) {
+      if (
+        dealVisita &&
+        !dealVisita.fechado &&
+        dealVisita.id !== dealInscricao?.id &&
+        !visitasJaFechadasNesteRun.has(dealVisita.id)
+      ) {
+        visitasJaFechadasNesteRun.add(dealVisita.id);
         const tagVisita =
           visitaCorrespondente!.status === "no_show" ? "no-show-convertido" : "visita-convertida";
         if (dryRun) {

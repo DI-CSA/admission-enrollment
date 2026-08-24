@@ -689,6 +689,100 @@ export async function buscarDealVisitaPorEmail(
 }
 
 /**
+ * Fusão reversa (visita agendada DEPOIS de já existir inscrição): localiza o
+ * deal de INSCRIÇÃO de uma pessoa pelo e-mail do contato, para juntar a visita
+ * ao MESMO deal em vez de criar um card separado — espelha `buscarDealVisitaPorEmail`
+ * na direção oposta. `registrarNegociacaoInscricao` só verifica visita→inscrição
+ * (a inscrição busca uma visita ANTERIOR); quando a ordem é invertida (a pessoa
+ * já tinha se inscrito e só depois agenda a visita), nada verificava o sentido
+ * contrário — este helper cobre esse caso. Só considera deals com token `[LAN:]`
+ * no nome, ainda ABERTOS (não fechados) e SEM `[VIS:]` (evita reunir de novo um
+ * deal já mesclado). Nunca lança: em falha retorna null.
+ */
+export async function buscarDealInscricaoPorEmail(
+  email: string,
+): Promise<{ id: string; nome: string } | null> {
+  const token = process.env.RD_CRM_TOKEN;
+  if (!token || !email) return null;
+  try {
+    const res = await fetch(
+      `${RD_CRM_BASE}/contacts?token=${encodeURIComponent(token)}&email=${encodeURIComponent(email.trim())}`,
+      { method: "GET", headers: { Accept: "application/json" } },
+    );
+    if (!res.ok) return null;
+    const body = (await res.json()) as unknown;
+    const contatos = Array.isArray(body)
+      ? (body as Array<Record<string, unknown>>)
+      : ((body as { contacts?: Array<Record<string, unknown>> })?.contacts ?? []);
+    const contato = contatos[0];
+    const deals = Array.isArray(contato?.deals)
+      ? (contato!.deals as Array<Record<string, unknown>>)
+      : [];
+    const candidatos = deals.filter((d) => {
+      const nome = typeof d?.name === "string" ? d.name : "";
+      return /\[LAN:/.test(nome) && !/\[VIS:/.test(nome);
+    });
+    for (const d of candidatos) {
+      const id = String(d.id ?? d._id ?? "");
+      if (!id) continue;
+      const det = await fetch(
+        `${RD_CRM_BASE}/deals/${encodeURIComponent(id)}?token=${encodeURIComponent(token)}`,
+        { method: "GET", headers: { Accept: "application/json" } },
+      );
+      if (!det.ok) continue;
+      const dd = (await det.json()) as { name?: string; win?: unknown; closed_at?: unknown };
+      if (extrairFechado(dd as Record<string, unknown>)) continue; // já encerrado — não reaproveita
+      return { id, nome: dd.name ?? (typeof d.name === "string" ? d.name : "") };
+    }
+    return null;
+  } catch (e) {
+    console.warn("[rdcrm] falha ao buscar inscrição por e-mail:", e);
+    return null;
+  }
+}
+
+/**
+ * Mescla os dados da VISITA num deal de INSCRIÇÃO já existente (fusão reversa —
+ * ver `buscarDealInscricaoPorEmail`): acrescenta o token `[VIS:<id>]` ao nome
+ * (idempotência nas próximas execuções) e grava os campos personalizados da
+ * visita. Não move a etapa do funil (o deal já está mais avançado). Nunca
+ * lança: em falha retorna false.
+ */
+export async function mesclarVisitaNoDealDeInscricao(
+  dealId: string,
+  nomeAtual: string,
+  agendamentoId: string,
+  d: DadosVisitaCf,
+): Promise<boolean> {
+  const token = process.env.RD_CRM_TOKEN;
+  if (!token || !dealId) return false;
+  const novoNome = /\[VIS:/.test(nomeAtual)
+    ? nomeAtual
+    : `${nomeAtual} ${tokenVisita(agendamentoId)}`;
+  const cf = montarCamposVisitaCf(d);
+  try {
+    const res = await fetch(
+      `${RD_CRM_BASE}/deals/${encodeURIComponent(dealId)}?token=${encodeURIComponent(token)}`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({
+          deal: { name: novoNome, ...(cf.length ? { deal_custom_fields: cf } : {}) },
+        }),
+      },
+    );
+    if (!res.ok) {
+      console.warn("[rdcrm] mesclar visita em inscrição não-OK:", res.status, dealId);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.warn("[rdcrm] falha ao mesclar visita em inscrição:", dealId, e);
+    return false;
+  }
+}
+
+/**
  * Move a negociação para uma etapa do funil (PUT /deals/{id}). Retorna true no
  * sucesso. Nunca lança: em falha retorna false e registra log.
  */
@@ -1057,6 +1151,38 @@ export async function marcarNegociacaoGanha(dealId: string): Promise<boolean> {
     return true;
   } catch (e) {
     console.warn("[rdcrm] falha ao marcar ganha:", dealId, e);
+    return false;
+  }
+}
+
+/**
+ * Marca a negociação como PERDIDA (win=false). Usado para encerrar o card de
+ * VISITA quando o agendamento é cancelado na AGOS (status='cancelada') e o
+ * deal ainda não foi mesclado numa inscrição — sem isso, o card ficava aberto
+ * para sempre no funil, sem ninguém nunca mais tocá-lo (ver
+ * `sincronizarVisitasCrm`, que já não sincroniza mais os cancelados, então
+ * este é o único ponto que fecha o card). PUT /deals/{id}. Nunca lança: em
+ * falha retorna false.
+ */
+export async function marcarNegociacaoPerdida(dealId: string): Promise<boolean> {
+  const token = process.env.RD_CRM_TOKEN;
+  if (!token || !dealId) return false;
+  try {
+    const res = await fetch(
+      `${RD_CRM_BASE}/deals/${encodeURIComponent(dealId)}?token=${encodeURIComponent(token)}`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ deal: { win: false } }),
+      },
+    );
+    if (!res.ok) {
+      console.warn("[rdcrm] marcar perdida não-OK:", res.status, dealId);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.warn("[rdcrm] falha ao marcar perdida:", dealId, e);
     return false;
   }
 }
