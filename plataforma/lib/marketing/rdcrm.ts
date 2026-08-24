@@ -20,6 +20,43 @@ import "server-only";
 
 const RD_CRM_DEALS_URL = "https://crm.rdstation.com/api/v1/deals";
 
+/**
+ * Wrapper de fetch para a API do RD CRM com retry em 429 (rate limit) e 5xx.
+ * O RD limita requisições por instância; as conciliações disparam dezenas/centenas
+ * de escritas em rajada (ex.: `conciliar-visitas` ~184 PUTs, `conciliar-funil-crm`
+ * na carga inicial atualiza centenas de cards + cria ~120 tarefas) e estouram o
+ * limite — sem retry, metade das gravações falha com 429. Respeita o header
+ * `Retry-After` quando presente; senão faz backoff exponencial com teto. Mantém
+ * o contrato dos chamadores (retorna o `Response` final; eles já tratam `!res.ok`
+ * e `try/catch`). Chama `globalThis.fetch` de propósito — não é o próprio `fetch`
+ * "cru", para não recursar. Só relança o erro de rede após esgotar as tentativas.
+ */
+async function rdFetch(
+  input: string,
+  init?: RequestInit,
+  tentativas = 4,
+): Promise<Response> {
+  let ultimaResp: Response | null = null;
+  for (let i = 0; i < tentativas; i++) {
+    try {
+      const res = await globalThis.fetch(input, init);
+      if (res.status !== 429 && res.status < 500) return res;
+      ultimaResp = res;
+    } catch (e) {
+      if (i === tentativas - 1) throw e;
+    }
+    if (i < tentativas - 1) {
+      const ra = ultimaResp ? Number(ultimaResp.headers.get("retry-after")) : NaN;
+      const esperaMs =
+        Number.isFinite(ra) && ra > 0
+          ? Math.min(30_000, ra * 1000)
+          : Math.min(8_000, 500 * 2 ** i); // 500ms, 1s, 2s, 4s...
+      await new Promise((r) => setTimeout(r, esperaMs));
+    }
+  }
+  return ultimaResp as Response;
+}
+
 export interface NegociacaoInscricao {
   /** Número da inscrição no RM (compõe o nome da negociação e é idempotência lógica). */
   numeroInscricao: number | string | null;
@@ -149,7 +186,7 @@ export async function atualizarCamposVisitaDeal(
   const cf = montarCamposVisitaCf(d);
   if (!cf.length) return false;
   try {
-    const res = await fetch(
+    const res = await rdFetch(
       `${RD_CRM_BASE}/deals/${encodeURIComponent(dealId)}?token=${encodeURIComponent(token)}`,
       {
         method: "PUT",
@@ -232,7 +269,7 @@ export async function criarNegociacaoVisita(v: {
   };
 
   try {
-    const res = await fetch(`${RD_CRM_DEALS_URL}?token=${encodeURIComponent(token)}`, {
+    const res = await rdFetch(`${RD_CRM_DEALS_URL}?token=${encodeURIComponent(token)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify(payload),
@@ -396,7 +433,7 @@ export async function registrarNegociacaoInscricao(
     if (alvo) {
       const nomeMerge = `${alvo.nome} · ${nomeNegociacao}`;
       try {
-        const put = await fetch(
+        const put = await rdFetch(
           `${RD_CRM_BASE}/deals/${encodeURIComponent(alvo.id)}?token=${encodeURIComponent(token)}`,
           {
             method: "PUT",
@@ -414,7 +451,7 @@ export async function registrarNegociacaoInscricao(
         );
         if (put.ok) {
           for (const p of dealProducts) {
-            await fetch(
+            await rdFetch(
               `${RD_CRM_BASE}/deals/${encodeURIComponent(alvo.id)}/deal_products?token=${encodeURIComponent(token)}`,
               {
                 method: "POST",
@@ -442,7 +479,7 @@ export async function registrarNegociacaoInscricao(
   };
 
   try {
-    const res = await fetch(
+    const res = await rdFetch(
       `${RD_CRM_DEALS_URL}?token=${encodeURIComponent(token)}`,
       {
         method: "POST",
@@ -521,7 +558,7 @@ export async function buscarNegociacaoPorNumeroInscricao(
 
   const base = `Inscrição nº ${numeroInscricao}`;
   try {
-    const res = await fetch(
+    const res = await rdFetch(
       `${RD_CRM_BASE}/deals?token=${encodeURIComponent(token)}&name=${encodeURIComponent(base)}&limit=200`,
       { method: "GET", headers: { Accept: "application/json" } },
     );
@@ -579,7 +616,7 @@ export async function listarNegociacoesDoFunil(): Promise<NegociacaoCrm[]> {
   for (let page = 1; page <= 100; page++) {
     let body: unknown;
     try {
-      const res = await fetch(
+      const res = await rdFetch(
         `${RD_CRM_BASE}/deals?token=${encodeURIComponent(token)}&limit=200&page=${page}` +
           (pipeline ? `&deal_pipeline_id=${encodeURIComponent(pipeline)}` : ""),
         { method: "GET", headers: { Accept: "application/json" } },
@@ -632,7 +669,7 @@ export async function buscarDealVisitaPorEmail(
   const RE = process.env.RD_CRM_DEAL_STAGE_VISITA_REALIZADA_ID?.trim();
   if (!token || !email || (!AG && !RE)) return null;
   try {
-    const res = await fetch(
+    const res = await rdFetch(
       `${RD_CRM_BASE}/contacts?token=${encodeURIComponent(token)}&email=${encodeURIComponent(email.trim())}`,
       { method: "GET", headers: { Accept: "application/json" } },
     );
@@ -654,7 +691,7 @@ export async function buscarDealVisitaPorEmail(
     for (const d of candidatos) {
       const id = String(d.id ?? d._id ?? "");
       if (!id) continue;
-      const det = await fetch(
+      const det = await rdFetch(
         `${RD_CRM_BASE}/deals/${encodeURIComponent(id)}?token=${encodeURIComponent(token)}`,
         { method: "GET", headers: { Accept: "application/json" } },
       );
@@ -705,7 +742,7 @@ export async function buscarDealInscricaoPorEmail(
   const token = process.env.RD_CRM_TOKEN;
   if (!token || !email) return null;
   try {
-    const res = await fetch(
+    const res = await rdFetch(
       `${RD_CRM_BASE}/contacts?token=${encodeURIComponent(token)}&email=${encodeURIComponent(email.trim())}`,
       { method: "GET", headers: { Accept: "application/json" } },
     );
@@ -725,7 +762,7 @@ export async function buscarDealInscricaoPorEmail(
     for (const d of candidatos) {
       const id = String(d.id ?? d._id ?? "");
       if (!id) continue;
-      const det = await fetch(
+      const det = await rdFetch(
         `${RD_CRM_BASE}/deals/${encodeURIComponent(id)}?token=${encodeURIComponent(token)}`,
         { method: "GET", headers: { Accept: "application/json" } },
       );
@@ -761,7 +798,7 @@ export async function mesclarVisitaNoDealDeInscricao(
     : `${nomeAtual} ${tokenVisita(agendamentoId)}`;
   const cf = montarCamposVisitaCf(d);
   try {
-    const res = await fetch(
+    const res = await rdFetch(
       `${RD_CRM_BASE}/deals/${encodeURIComponent(dealId)}?token=${encodeURIComponent(token)}`,
       {
         method: "PUT",
@@ -793,7 +830,7 @@ export async function moverNegociacaoParaEtapa(
   const token = process.env.RD_CRM_TOKEN;
   if (!token || !dealId || !dealStageId) return false;
   try {
-    const res = await fetch(
+    const res = await rdFetch(
       `${RD_CRM_BASE}/deals/${encodeURIComponent(dealId)}?token=${encodeURIComponent(token)}`,
       {
         method: "PUT",
@@ -850,7 +887,7 @@ export async function ajustarValorReservaDeal(
   const productId = process.env.RD_CRM_PRODUCT_RESERVA_ID?.trim();
   if (!token || !dealId || !productId) return false;
   try {
-    const gd = await fetch(
+    const gd = await rdFetch(
       `${RD_CRM_BASE}/deals/${encodeURIComponent(dealId)}?token=${encodeURIComponent(token)}`,
       { method: "GET", headers: { Accept: "application/json" } },
     );
@@ -873,7 +910,7 @@ export async function ajustarValorReservaDeal(
 
     // Adiciona a reserva quando faltar.
     if (!temReserva) {
-      const add = await fetch(
+      const add = await rdFetch(
         `${RD_CRM_BASE}/deals/${encodeURIComponent(dealId)}/deal_products?token=${encodeURIComponent(token)}`,
         {
           method: "POST",
@@ -904,7 +941,7 @@ export async function ajustarValorReservaDeal(
     for (const p of outros) {
       const pid = p.id ?? p._id;
       if (!pid) continue;
-      const del = await fetch(
+      const del = await rdFetch(
         `${RD_CRM_BASE}/deals/${encodeURIComponent(dealId)}/deal_products/${encodeURIComponent(pid)}?token=${encodeURIComponent(token)}`,
         { method: "DELETE", headers: { Accept: "application/json" } },
       );
@@ -1003,7 +1040,7 @@ export async function atualizarCamposMatriculaDeal(
   push("RD_CRM_CF_DATA_PAGAMENTO_ID", fmtDataBr(dados.dataPagamentoReserva));
   if (!cf.length) return false;
   try {
-    const res = await fetch(
+    const res = await rdFetch(
       `${RD_CRM_BASE}/deals/${encodeURIComponent(dealId)}?token=${encodeURIComponent(token)}`,
       {
         method: "PUT",
@@ -1058,7 +1095,7 @@ export async function criarTarefaCrm(
   };
 
   try {
-    const res = await fetch(`${RD_CRM_BASE}/tasks?token=${encodeURIComponent(token)}`, {
+    const res = await rdFetch(`${RD_CRM_BASE}/tasks?token=${encodeURIComponent(token)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify(payload),
@@ -1089,7 +1126,7 @@ export async function atualizarTagsDeal(
 
   try {
     // 1. Busca as tags atuais
-    const getRes = await fetch(`${RD_CRM_BASE}/deals/${encodeURIComponent(dealId)}?token=${encodeURIComponent(token)}`);
+    const getRes = await rdFetch(`${RD_CRM_BASE}/deals/${encodeURIComponent(dealId)}?token=${encodeURIComponent(token)}`);
     if (!getRes.ok) return false;
     const dealData = (await getRes.json()) as { tags?: Array<{ name: string }> };
 
@@ -1102,7 +1139,7 @@ export async function atualizarTagsDeal(
     }
 
     // 3. Atualiza o deal
-    const putRes = await fetch(`${RD_CRM_BASE}/deals/${encodeURIComponent(dealId)}?token=${encodeURIComponent(token)}`, {
+    const putRes = await rdFetch(`${RD_CRM_BASE}/deals/${encodeURIComponent(dealId)}?token=${encodeURIComponent(token)}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({ deal: { tags: finalTags } }),
@@ -1136,7 +1173,7 @@ export async function marcarNegociacaoGanha(dealId: string): Promise<boolean> {
   const token = process.env.RD_CRM_TOKEN;
   if (!token || !dealId) return false;
   try {
-    const res = await fetch(
+    const res = await rdFetch(
       `${RD_CRM_BASE}/deals/${encodeURIComponent(dealId)}?token=${encodeURIComponent(token)}`,
       {
         method: "PUT",
@@ -1168,7 +1205,7 @@ export async function marcarNegociacaoPerdida(dealId: string): Promise<boolean> 
   const token = process.env.RD_CRM_TOKEN;
   if (!token || !dealId) return false;
   try {
-    const res = await fetch(
+    const res = await rdFetch(
       `${RD_CRM_BASE}/deals/${encodeURIComponent(dealId)}?token=${encodeURIComponent(token)}`,
       {
         method: "PUT",
@@ -1204,7 +1241,7 @@ export async function listarTarefasAbertasDoDeal(dealId: string): Promise<Tarefa
   const token = process.env.RD_CRM_TOKEN;
   if (!token || !dealId) return [];
   try {
-    const res = await fetch(
+    const res = await rdFetch(
       `${RD_CRM_BASE}/tasks?token=${encodeURIComponent(token)}&deal_id=${encodeURIComponent(dealId)}&limit=100`,
       { headers: { Accept: "application/json" } },
     );
@@ -1239,7 +1276,7 @@ export async function concluirTarefa(taskId: string): Promise<boolean> {
   const token = process.env.RD_CRM_TOKEN;
   if (!token || !taskId) return false;
   try {
-    const res = await fetch(
+    const res = await rdFetch(
       `${RD_CRM_BASE}/tasks/${encodeURIComponent(taskId)}?token=${encodeURIComponent(token)}`,
       {
         method: "PUT",
@@ -1304,7 +1341,7 @@ export async function atualizarContexto360Deal(
   push("RD_CRM_CF_VISITA_PARTICIPANTES_ID", dados.visitaParticipantes);
   if (!cf.length) return false;
   try {
-    const res = await fetch(
+    const res = await rdFetch(
       `${RD_CRM_BASE}/deals/${encodeURIComponent(dealId)}?token=${encodeURIComponent(token)}`,
       {
         method: "PUT",
