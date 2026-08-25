@@ -39,6 +39,7 @@ import {
   concluirTarefa,
   reagendarTarefa,
   atualizarContexto360Deal,
+  cursoPretendidoDePS,
   extrairIdVisitaDoNome,
   type NegociacaoCrm,
 } from "@/lib/marketing/rdcrm";
@@ -101,6 +102,8 @@ interface InscricaoTotvs {
   IDLAN: number | null;
   RAMAT: string | null;
   CANDIDATO: string;
+  /** Nome do PS (SPSPROCESSOSELETIVO.NOME) = curso pretendido. */
+  PS_NOME: string | null;
   RESP_EMAIL: string | null;
   RESP_CPF: string | null;
   STATUSLAN: number | null;
@@ -207,6 +210,7 @@ export async function conciliarFunilCrm(
     const anoAtual = process.env.PS_ANO_ATUAL?.trim() || String(ANO_PROCESSO);
     const inscricoes = await queryTotvs<InscricaoTotvs>(
       `SELECT i.NUMEROINSCRICAO, i.IDLAN, i.RAMAT, u.NOME AS CANDIDATO,
+              ps.NOME AS PS_NOME,
               resp.EMAIL AS RESP_EMAIL, resp.CPF AS RESP_CPF,
               fl.STATUSLAN,
               res.STATUSLAN AS RESERVA_STATUS,
@@ -312,7 +316,7 @@ export async function conciliarFunilCrm(
         if (dryRun) {
           log(
             "contexto_360",
-            `[dry-run] Atualizaria Contexto 360 do deal ${dealInscricao.id}: "${textoStatusInscricao(insc)}" / "${textoStatusMatricula(insc)}" / "${vinculoStatus}".`,
+            `[dry-run] Atualizaria Contexto 360 do deal ${dealInscricao.id}: "${textoStatusInscricao(insc)}" / "${textoStatusMatricula(insc)}" / "${vinculoStatus}" / curso "${cursoPretendidoDePS(insc.PS_NOME) ?? "—"}".`,
             dealInscricao.id,
           );
         } else {
@@ -320,6 +324,7 @@ export async function conciliarFunilCrm(
             inscricaoStatus: textoStatusInscricao(insc),
             matriculaStatus: textoStatusMatricula(insc),
             vinculoStatus,
+            cursoPretendido: insc.PS_NOME,
             // Só preenche o contexto da visita quando NÃO houve fusão
             // automática (deal_único já teria copiado isso na hora).
             ...(visitaCorrespondente && dealVisita?.id !== dealInscricao.id

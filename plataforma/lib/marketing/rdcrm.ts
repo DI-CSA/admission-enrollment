@@ -139,6 +139,27 @@ export function extrairIdVisitaDoNome(nome: string): string | null {
   return m ? m[1] : null;
 }
 
+/**
+ * "Curso pretendido" limpo a partir do NOME do PS. Cada série tem seu próprio PS
+ * ("CSA Leblon - Processo Seletivo 2027-F1-1º Ano do Fund"), então basta remover o
+ * prefixo institucional + código de segmento ("…<ano>-<SEG>-") e normalizar as
+ * abreviações do RM ("Fund"/"Fund." → "Ensino Fundamental", "EM" → "Ensino Médio").
+ * Ex.: "…2027-F1-1º Ano do Fund" → "1º Ano do Ensino Fundamental";
+ *      "…2027-M2-2ª Série do EM" → "2ª Série do Ensino Médio".
+ * Se o nome não casar o padrão, devolve-o intacto (falha segura).
+ */
+export function cursoPretendidoDePS(
+  nomePS: string | null | undefined,
+): string | null | undefined {
+  if (!nomePS) return nomePS;
+  const m = nomePS.match(/\d{4}-[A-Za-z]+\d*-\s*(.+)$/);
+  const serie = (m ? m[1] : nomePS).trim();
+  return serie
+    .replace(/\bFund\.?$/i, "Ensino Fundamental")
+    .replace(/\bEM$/i, "Ensino Médio")
+    .trim();
+}
+
 /** Dados do agendamento que viram campos personalizados do deal de visita. */
 export interface DadosVisitaCf {
   segmento?: string | null;
@@ -350,7 +371,7 @@ export async function registrarNegociacaoInscricao(
   if (cfProcessoId && neg.processoSeletivo) {
     dealCustomFields.push({
       custom_field_id: cfProcessoId,
-      value: neg.processoSeletivo,
+      value: cursoPretendidoDePS(neg.processoSeletivo) ?? neg.processoSeletivo,
     });
   }
   if (cfSerieId && neg.segmento) {
@@ -1356,13 +1377,17 @@ export interface Contexto360Deal {
   visitaSituacao?: string | null;
   visitaOperador?: string | null;
   visitaParticipantes?: string | null;
+  // Curso pretendido (nome do PS). Gravado na criação da inscrição; aqui serve
+  // de backfill/self-heal para cards antigos criados antes de o campo existir.
+  cursoPretendido?: string | null;
 }
 
 /**
  * Grava o Contexto 360º (status do funil unificado + dados da visita) no card
  * de Inscrição/Matrícula (PUT /deals/{id} deal_custom_fields). Só envia os
  * campos cujo UUID está no ambiente (RD_CRM_CF_INSCRICAO_STATUS_ID/
- * _MATRICULA_STATUS_ID/_VINCULO_STATUS_ID + os _VISITA_*_ID já existentes).
+ * _MATRICULA_STATUS_ID/_VINCULO_STATUS_ID + RD_CRM_CF_PROCESSO_ID e os
+ * _VISITA_*_ID já existentes).
  * Nunca lança: em falha retorna false. Retorna false (no-op) quando não há
  * nenhum campo a enviar.
  */
@@ -1380,6 +1405,7 @@ export async function atualizarContexto360Deal(
   push("RD_CRM_CF_INSCRICAO_STATUS_ID", dados.inscricaoStatus);
   push("RD_CRM_CF_MATRICULA_STATUS_ID", dados.matriculaStatus);
   push("RD_CRM_CF_VINCULO_STATUS_ID", dados.vinculoStatus);
+  push("RD_CRM_CF_PROCESSO_ID", cursoPretendidoDePS(dados.cursoPretendido));
   push("RD_CRM_CF_VISITA_SITUACAO_ID", dados.visitaSituacao);
   push("RD_CRM_CF_VISITA_OPERADOR_ID", dados.visitaOperador);
   push("RD_CRM_CF_VISITA_PARTICIPANTES_ID", dados.visitaParticipantes);
