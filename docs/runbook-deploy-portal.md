@@ -263,10 +263,11 @@ curl -fsS -X POST -H "x-cron-secret: $SECRET" \
 ```
 
 > **Desde 2026-08-21**, `scripts/prov-conciliar-cron.sh` agenda os quatro jobs:
-> `conciliar-pagamentos` (08h/18h), `conciliar-visitas` (a cada 15 min — escreve de
-> verdade, sem dry-run), `conciliar-matriculas` (`:15` de cada hora) e `conciliar-funil-crm`
-> (`:30` de cada hora, **em dry-run** — `CONCILIAR_FUNIL_CRM_DRY_RUN` ainda não foi virada
-> para `"false"`; revisar `/var/log/csa-conciliar.log` antes de ligar a escrita). Ver
+> `conciliar-pagamentos` (hora em hora, `:00` — **desde 2026-09-01**; antes era só 08h/18h),
+> `conciliar-visitas` (a cada 15 min — escreve de verdade, sem dry-run), `conciliar-matriculas`
+> (`:15` de cada hora) e `conciliar-funil-crm` (`:30` de cada hora, **em dry-run** —
+> `CONCILIAR_FUNIL_CRM_DRY_RUN` ainda não foi virada para `"false"`; revisar
+> `/var/log/csa-conciliar.log` antes de ligar a escrita). Ver
 > [integracao_rd_station.md](integracao_rd_station.md) §8.3/§8.4.
 
 A conciliação de matrícula interpreta o boleto de reserva de **R$ 2.200**:
