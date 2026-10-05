@@ -74,6 +74,36 @@ export async function query<T extends QueryResultRow = QueryResultRow>(
 }
 
 /**
+ * Executa `fn` protegida por um advisory lock do Postgres (sessão dedicada,
+ * liberada no fim). Se outra execução já segura a mesma chave, retorna `null`
+ * SEM chamar `fn` — usado pelos jobs de conciliação (cron) para impedir que duas
+ * execuções sobrepostas (ex.: uma rodada atrasada por rate-limit do RD ainda em
+ * andamento quando a próxima do cron dispara) leiam o funil do CRM ao mesmo
+ * tempo e cheguem à mesma conclusão errada de "não existe" para o mesmo deal.
+ */
+export async function comLockDeSync<T>(
+  chave: number,
+  fn: () => Promise<T>,
+): Promise<T | null> {
+  const cliente = await getPool().connect();
+  try {
+    const { rows } = await cliente.query<{ obtido: boolean }>(
+      "SELECT pg_try_advisory_lock($1) AS obtido",
+      [chave],
+    );
+    if (!rows[0]?.obtido) return null;
+    return await fn();
+  } finally {
+    try {
+      await cliente.query("SELECT pg_advisory_unlock($1)", [chave]);
+    } catch {
+      /* a conexão será fechada de qualquer forma — o lock cai junto */
+    }
+    cliente.release();
+  }
+}
+
+/**
  * Executa uma função dentro de uma TRANSAÇÃO (BEGIN/COMMIT, ROLLBACK em erro).
  * Usado pelo agendamento para checar capacidade e inserir atomicamente.
  */

@@ -610,6 +610,52 @@ export async function buscarNegociacaoPorNumeroInscricao(
   }
 }
 
+/**
+ * Busca pontual (sem paginar o funil inteiro) por um deal de VISITA específico,
+ * pelo token exato `[VIS:<id>]` no nome. Usada como segunda checagem, logo antes
+ * de criar um deal novo, para não duplicar quando a listagem paginada do funil
+ * (`listarNegociacoesDoFunil`) tiver ficado incompleta (falha de rede numa
+ * página, ou corrida entre duas execuções do cron rodando ao mesmo tempo) e por
+ * isso não tiver trazido um deal que já existe. Nunca lança: em falha retorna
+ * null (o chamador segue o fluxo normal, que pode então criar um novo deal).
+ */
+export async function buscarNegociacaoVisitaPorToken(
+  agendamentoId: string,
+): Promise<NegociacaoCrm | null> {
+  const token = process.env.RD_CRM_TOKEN;
+  if (!token) return null;
+  const busca = tokenVisita(agendamentoId);
+  try {
+    const res = await rdFetch(
+      `${RD_CRM_BASE}/deals?token=${encodeURIComponent(token)}&name=${encodeURIComponent(busca)}&limit=200`,
+      { method: "GET", headers: { Accept: "application/json" } },
+    );
+    if (!res.ok) {
+      console.warn("[rdcrm] checagem pontual de duplicidade não-OK:", res.status, busca);
+      return null;
+    }
+    const body = (await res.json()) as unknown;
+    const lista = extrairListaDeals(body);
+    const alvo = lista.find((d) => {
+      const nome = typeof d?.name === "string" ? d.name : "";
+      return extrairIdVisitaDoNome(nome) === agendamentoId;
+    });
+    if (!alvo) return null;
+    const nomeAlvo = typeof alvo.name === "string" ? alvo.name : busca;
+    return {
+      id: String(alvo.id ?? alvo._id ?? ""),
+      nome: nomeAlvo,
+      dealStageId: extrairStageId(alvo.deal_stage),
+      dealStageName: extrairStageName(alvo.deal_stage),
+      idLan: extrairIdLanDoNome(nomeAlvo),
+      fechado: extrairFechado(alvo),
+    };
+  } catch (e) {
+    console.warn("[rdcrm] falha na checagem pontual de duplicidade:", busca, e);
+    return null;
+  }
+}
+
 /** Normaliza a resposta do GET /deals (array direto ou {deals:[...]}). */
 function extrairListaDeals(body: unknown): Array<Record<string, unknown>> {
   if (Array.isArray(body)) return body as Array<Record<string, unknown>>;

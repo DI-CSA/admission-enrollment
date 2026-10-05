@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { timingSafeEqual } from "node:crypto";
 import { sincronizarVisitasCrm } from "@/lib/agenda/crm-sync";
+import { comLockDeSync } from "@/lib/agenda/db";
+
+// Chave arbitrária (mas estável) do advisory lock — distinta por job para não
+// colidir com os locks dos demais `conciliar-*` caso ganhem o mesmo tratamento.
+const LOCK_CONCILIAR_VISITAS = 0x76_69_73_31; // "vis1"
 
 // Job de SINCRONIZAÇÃO DE VISITAS com o RD CRM (chamado por cron, NÃO pelo browser).
 //
@@ -37,7 +42,13 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const r = await sincronizarVisitasCrm();
+    const r = await comLockDeSync(LOCK_CONCILIAR_VISITAS, sincronizarVisitasCrm);
+    if (r === null) {
+      // Outra execução já está em andamento (ex.: rodada anterior atrasada por
+      // rate-limit do RD) — não roda em paralelo. O próprio cron tenta de novo
+      // no próximo ciclo.
+      return NextResponse.json({ ok: true, ignorado: "execucao-em-andamento" });
+    }
     return NextResponse.json({ ok: true, ...r });
   } catch (e) {
     console.warn("[conciliar-visitas] falha:", e);

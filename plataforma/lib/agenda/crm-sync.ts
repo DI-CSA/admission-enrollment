@@ -19,6 +19,7 @@ import {
   atualizarCamposVisitaDeal,
   extrairIdVisitaDoNome,
   buscarDealInscricaoPorEmail,
+  buscarNegociacaoVisitaPorToken,
   mesclarVisitaNoDealDeInscricao,
   marcarNegociacaoPerdida,
   atualizarTagsDeal,
@@ -104,13 +105,26 @@ export async function sincronizarVisitasCrm(): Promise<ResultadoSyncVisitas> {
   >();
   for (const d of deals) {
     const vid = extrairIdVisitaDoNome(d.nome);
-    if (vid)
-      porVisita.set(vid, {
-        id: d.id,
-        dealStageId: d.dealStageId,
-        fechado: d.fechado,
-        temLan: d.idLan != null,
-      });
+    if (!vid) continue;
+    const anterior = porVisita.get(vid);
+    if (anterior) {
+      // Dois deals com o MESMO token no funil — sintoma de duplicidade (ex.: a
+      // listagem paginada ficou incompleta numa rodada anterior e um segundo
+      // deal foi criado por engano). Não mescla automaticamente (decisão
+      // manual), só alerta e mantém o mais avançado para não reverter um
+      // "realizada" por causa da ordem arbitrária da paginação.
+      console.warn(
+        `[conciliar-visitas] duplicidade: dois deals com o token [VIS:${vid}] no funil ` +
+          `(${anterior.id} e ${d.id}) — revisar/mesclar manualmente no RD CRM.`,
+      );
+      if (anterior.dealStageId === REALIZADA && d.dealStageId !== REALIZADA) continue;
+    }
+    porVisita.set(vid, {
+      id: d.id,
+      dealStageId: d.dealStageId,
+      fechado: d.fechado,
+      temLan: d.idLan != null,
+    });
   }
 
   // Sincroniza só o ciclo de admissão atual: visitas a partir de
@@ -246,21 +260,46 @@ export async function sincronizarVisitasCrm(): Promise<ResultadoSyncVisitas> {
           }
         }
       } else {
-        const id = await criarNegociacaoVisita({
-          agendamentoId: b.id,
-          nome: b.nome,
-          email: b.email,
-          telefone: b.telefone,
-          dealStageId: realizada ? REALIZADA : AGENDADA,
-          titulo,
-          sourceName,
-          ...dados,
-        });
-        if (id) {
-          criados++;
-          // Deal criado já em REALIZADA (visita compareceu antes de existir deal):
-          // é a transição p/ realizada — espelha no Marketing.
-          if (realizada) emitirVisitaRealizadaMkt(b);
+        // Segunda checagem, pontual (não depende da listagem paginada do funil
+        // já lida em `deals`/`porVisita`, que pode ter ficado incompleta por
+        // falha de rede numa página ou por corrida com outra execução do cron
+        // rodando ao mesmo tempo): busca este token específico direto no RD
+        // antes de criar. Sem isso, uma listagem incompleta faz o sistema achar
+        // que "não existe deal" e criar um segundo — foi o que gerou o card
+        // duplicado do Guilherme (mesmo token, um em "Agendada" e outro já
+        // nascendo em "Realizada").
+        const dup = await buscarNegociacaoVisitaPorToken(b.id);
+        if (dup) {
+          console.warn(
+            `[conciliar-visitas] deal ${dup.id} já existia para a visita ${b.id} ` +
+              `(fora da listagem paginada desta rodada) — atualizando em vez de duplicar.`,
+          );
+          const ok = await atualizarCamposVisitaDeal(dup.id, dados);
+          if (ok) atualizados++;
+          if (realizada && dup.dealStageId === AGENDADA) {
+            const mov = await moverNegociacaoParaEtapa(dup.id, REALIZADA);
+            if (mov) {
+              avancados++;
+              emitirVisitaRealizadaMkt(b);
+            }
+          }
+        } else {
+          const id = await criarNegociacaoVisita({
+            agendamentoId: b.id,
+            nome: b.nome,
+            email: b.email,
+            telefone: b.telefone,
+            dealStageId: realizada ? REALIZADA : AGENDADA,
+            titulo,
+            sourceName,
+            ...dados,
+          });
+          if (id) {
+            criados++;
+            // Deal criado já em REALIZADA (visita compareceu antes de existir deal):
+            // é a transição p/ realizada — espelha no Marketing.
+            if (realizada) emitirVisitaRealizadaMkt(b);
+          }
         }
       }
     } else {
