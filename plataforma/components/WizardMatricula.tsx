@@ -2780,7 +2780,44 @@ function Resultado({
     | "carregando"
     | null
   >("carregando");
+  // Tentativas automáticas já feitas (ver efeito de auto-retry abaixo).
+  const [tentativas, setTentativas] = useState(0);
+  const MAX_TENTATIVAS_AUTO = 3;
+  const INTERVALO_RETRY_MS = 6000;
 
+  // Busca o boleto — usada pelo auto-retry e pelo botão manual "Atualizar
+  // boleto" (ambos callbacks assíncronos, não o corpo síncrono de um efeito).
+  // O registro do boleto no RM pode levar alguns segundos a mais que a
+  // efetivação da matrícula em si.
+  const carregarBoleto = useCallback(async () => {
+    setBoleto("carregando");
+    try {
+      const q = new URLSearchParams({
+        numeroInscricao: String(numeroInscricao),
+        idps: String(idps),
+      });
+      const res = await fetch(`/api/matricula/boleto?${q.toString()}`, {
+        cache: "no-store",
+      });
+      const data = (await res.json()) as
+        | {
+            ok: true;
+            boleto?: {
+              idBoleto: number | null;
+              temPdf: boolean;
+              urlBoletoFixo: string | null;
+              linhaDigitavel: string | null;
+            } | null;
+          }
+        | { ok: false };
+      setBoleto(data.ok ? (data.boleto ?? null) : null);
+    } catch {
+      setBoleto(null);
+    }
+  }, [numeroInscricao, idps]);
+
+  // Carga inicial (inline, não via `carregarBoleto`): mesmo fetch, mas com
+  // cancelamento por desmontagem — padrão já usado no restante do wizard.
   useEffect(() => {
     let ativo = true;
     (async () => {
@@ -2813,6 +2850,18 @@ function Resultado({
     };
   }, [numeroInscricao, idps]);
 
+  // Auto-retry: enquanto o boleto não aparecer, tenta de novo sozinho algumas
+  // vezes (intervalo curto) antes de pedir um clique manual — cobre o atraso
+  // comum de registro no RM sem exigir logout/login nem ação do usuário.
+  useEffect(() => {
+    if (boleto !== null || tentativas >= MAX_TENTATIVAS_AUTO) return;
+    const t = setTimeout(() => {
+      setTentativas((n) => n + 1);
+      void carregarBoleto();
+    }, INTERVALO_RETRY_MS);
+    return () => clearTimeout(t);
+  }, [boleto, tentativas, carregarBoleto]);
+
   const urlBoletoPdf =
     boleto && boleto !== "carregando" && boleto.temPdf && boleto.idBoleto
       ? `/api/matricula/boleto?numeroInscricao=${numeroInscricao}&idps=${idps}` +
@@ -2837,8 +2886,24 @@ function Resultado({
         </p>
       </div>
 
-      {boleto === "carregando" && (
+      {(boleto === "carregando" ||
+        (boleto === null && tentativas < MAX_TENTATIVAS_AUTO)) && (
         <p className="text-sm text-cinza-suave">Verificando boleto…</p>
+      )}
+
+      {boleto === null && tentativas >= MAX_TENTATIVAS_AUTO && (
+        <div className="space-y-1.5">
+          <p className="text-sm text-cinza-suave">
+            O boleto ainda está sendo gerado. Tente atualizar em instantes.
+          </p>
+          <button
+            type="button"
+            onClick={() => void carregarBoleto()}
+            className="text-sm font-medium text-csa-azul underline hover:text-csa-azul/80"
+          >
+            Atualizar boleto
+          </button>
+        </div>
       )}
 
       {urlBoletoPdf && (

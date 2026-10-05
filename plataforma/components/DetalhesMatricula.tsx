@@ -17,6 +17,7 @@ const botaoBoleto =
   "block w-full rounded-lg bg-csa-azul px-4 py-2.5 text-center text-sm font-semibold text-white transition hover:bg-csa-azul/90";
 const botaoContrato =
   "block w-full rounded-lg border border-csa-azul/30 bg-white px-4 py-2.5 text-center text-sm font-semibold text-csa-azul transition hover:bg-csa-azul/5";
+const botaoSecundario = "text-xs font-medium text-csa-azul underline hover:text-csa-azul/80";
 
 function formatarDataHora(iso: string): string | null {
   const d = new Date(iso);
@@ -62,6 +63,11 @@ export function DetalhesMatricula({
     "carregando",
   );
   const [contrato, setContrato] = useState<ContratoParams | null>(null);
+  // Incrementado pelo botão "Atualizar boleto" para forçar uma nova busca (o
+  // registro do boleto no RM pode demorar alguns segundos a mais que a
+  // efetivação da matrícula em si; sem isso, só um novo carregamento de página
+  // — ex.: logout/login — refazia a busca).
+  const [recarregar, setRecarregar] = useState(0);
 
   useEffect(() => {
     if (numeroInscricao == null || idps == null) {
@@ -69,6 +75,7 @@ export function DetalhesMatricula({
       return;
     }
     let ativo = true;
+    if (recarregar > 0) setBoleto("carregando");
     const q = new URLSearchParams({
       numeroInscricao: String(numeroInscricao),
       idps: String(idps),
@@ -86,6 +93,18 @@ export function DetalhesMatricula({
         if (ativo) setBoleto(null);
       }
     })();
+    return () => {
+      ativo = false;
+    };
+  }, [numeroInscricao, idps, recarregar]);
+
+  useEffect(() => {
+    if (numeroInscricao == null || idps == null) return;
+    let ativo = true;
+    const q = new URLSearchParams({
+      numeroInscricao: String(numeroInscricao),
+      idps: String(idps),
+    });
     (async () => {
       try {
         const res = await fetch(`/api/matricula/contexto?${q.toString()}`, {
@@ -183,6 +202,17 @@ export function DetalhesMatricula({
 
       {boleto === "carregando" && (
         <p className="text-xs text-emerald-900/70">Verificando boleto…</p>
+      )}
+
+      {boleto === null && (
+        <div className="space-y-1.5">
+          <p className="text-xs text-emerald-900/70">
+            O boleto ainda está sendo gerado. Tente atualizar em instantes.
+          </p>
+          <button type="button" onClick={() => setRecarregar((n) => n + 1)} className={botaoSecundario}>
+            Atualizar boleto
+          </button>
+        </div>
       )}
 
       {urlBoletoPdf && (
