@@ -7,7 +7,11 @@
 //   SPSPROCESSOSELETIVO(IDPS,CODCOLIGADA,CODFILIAL,NOME,STATUS,EXIBENOPORTAL,USANOVOPORTAL,
 //     VALORINSCRICAO,DTINIINSCRICAO,DTFIMINSCRICAO,ARQUIVOEDITAL,NOMEARQUIVOEDITAL)
 //   SPSAREAOFERTADA(PK CODCOLIGADA,IDPS,IDAREAINTERESSE; NUMEROVAGAS,VALORINSCRICAO,STATUS,
-//     DTNASCIMENTOMINIMA,DTNASCIMENTOMAXIMA,RESUMO) JOIN SPSAREAINTERESSE(IDAREAINTERESSE,NOME,GRUPO)
+//     DTNASCIMENTOMINIMA,DTNASCIMENTOMAXIMA,RESUMO,DTINICIOINSCRICAO,DTTERMINOINSCRICAO) JOIN
+//     SPSAREAINTERESSE(IDAREAINTERESSE,NOME,GRUPO)
+//   -- DTINICIOINSCRICAO/DTTERMINOINSCRICAO são o prazo de inscrição DA ÁREA (por série),
+//   -- independente de SPSPROCESSOSELETIVO.DTINIINSCRICAO/DTFIMINSCRICAO (prazo do PS inteiro).
+//   -- Uma série pode encerrar a inscrição antes do PS como um todo — sempre checar os dois.
 //   PPESSOA(PK LOGID,CODIGO; CPF,NOME,EMAIL,EMAILPESSOAL,DTNASCIMENTO,TELEFONE1..3)
 //   SPSUSUARIO(PK CODUSUARIOPS,LOGID; CPF,NOME,EMAIL,DTNASCIMENTO,CODPESSOA,SENHA,
 //     TOKEN,RESETSENHATOKEN,DTEXPIRACAORESETSENHA) = conta de login do portal (responsável)
@@ -172,7 +176,12 @@ interface AreaRow {
   RESUMO: string | null;
 }
 
-/** Lista as áreas ofertadas ativas de um processo seletivo (com o nome da área). */
+/**
+ * Lista as áreas ofertadas ativas de um processo seletivo (com o nome da área).
+ * Só inclui áreas com inscrição aberta hoje na PRÓPRIA ÁREA (DTINICIOINSCRICAO/
+ * DTTERMINOINSCRICAO) — independente do prazo do PS como um todo (ver cabeçalho
+ * do arquivo). Área sem essas datas (NULL) não é restringida por elas.
+ */
 export async function listarAreasOfertadas(
   idps: number,
 ): Promise<AreaOfertadaRM[]> {
@@ -183,6 +192,8 @@ export async function listarAreasOfertadas(
      FROM SPSAREAOFERTADA ao
      JOIN SPSAREAINTERESSE ai ON ai.IDAREAINTERESSE = ao.IDAREAINTERESSE
      WHERE ao.CODCOLIGADA = @col AND ao.IDPS = @idps AND ao.STATUS = 'T'
+       AND (ao.DTINICIOINSCRICAO IS NULL OR GETDATE() >= ao.DTINICIOINSCRICAO)
+       AND (ao.DTTERMINOINSCRICAO IS NULL OR GETDATE() <= ao.DTTERMINOINSCRICAO)
      ORDER BY ai.NOME`,
     { col: COD_COLIGADA, idps },
   );
@@ -297,8 +308,13 @@ interface SerieRow {
  * segmento: o responsável escolhe a série e o PS correto é resolvido a partir dela.
  *
  * Só inclui PS publicados (EXIBENOPORTAL='T'), ativos (STATUS='T') e com inscrições
- * abertas hoje — e áreas ativas (ao.STATUS='T'). O filtro por ano no NOME exclui
- * eventos (nivelamento, revisão de conteúdos etc.) que não são admissão.
+ * abertas hoje — e áreas ativas (ao.STATUS='T') e com inscrições abertas hoje NA
+ * PRÓPRIA ÁREA (ao.DTINICIOINSCRICAO/DTTERMINOINSCRICAO): uma série pode encerrar a
+ * inscrição antes do PS inteiro (ex.: vagas de uma série específica esgotando o
+ * prazo mais cedo), e nesse caso ela deve sumir da lista mesmo com o PS ainda aberto.
+ * Área sem essas datas configuradas (NULL) não é restringida por elas — só pelo PS.
+ * O filtro por ano no NOME exclui eventos (nivelamento, revisão de conteúdos etc.)
+ * que não são admissão.
  */
 export async function listarSeriesAbertas(
   ano: number,
@@ -317,6 +333,8 @@ export async function listarSeriesAbertas(
        AND ps.EXIBENOPORTAL = 'T' AND ps.STATUS = 'T'
        AND GETDATE() BETWEEN ps.DTINIINSCRICAO AND ps.DTFIMINSCRICAO
        AND ao.STATUS = 'T'
+       AND (ao.DTINICIOINSCRICAO IS NULL OR GETDATE() >= ao.DTINICIOINSCRICAO)
+       AND (ao.DTTERMINOINSCRICAO IS NULL OR GETDATE() <= ao.DTTERMINOINSCRICAO)
        AND ps.NOME LIKE @ano
      ORDER BY ps.NOME, ai.NOME`,
     { col: COD_COLIGADA, ano: `%${ano}%` },

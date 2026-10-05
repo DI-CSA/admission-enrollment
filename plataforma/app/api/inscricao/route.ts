@@ -9,6 +9,7 @@ import {
   obterNomeRmPorCpf,
   reconhecerResponsavelPorCpf,
   listarDocumentosExigidos,
+  listarAreasOfertadas,
 } from "@/lib/totvs/queries";
 import {
   criarInscricao,
@@ -569,6 +570,17 @@ export async function POST(req: NextRequest) {
     if (!ps || !processoInscritivel(ps)) {
       return NextResponse.json(
         { ok: false, erro: "ps-indisponivel" },
+        { status: 409 },
+      );
+    }
+
+    // Revalida a ÁREA (série) escolhida — pode encerrar a inscrição antes do PS
+    // inteiro (DTINICIOINSCRICAO/DTTERMINOINSCRICAO em SPSAREAOFERTADA, ver
+    // lib/totvs/queries.ts). `listarAreasOfertadas` já filtra por essas datas.
+    const areasDisponiveis = await listarAreasOfertadas(idps);
+    if (!areasDisponiveis.some((a) => a.idAreaInteresse === opcao.areaInteresseId)) {
+      return NextResponse.json(
+        { ok: false, erro: "area-indisponivel" },
         { status: 409 },
       );
     }
