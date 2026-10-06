@@ -15,6 +15,9 @@ export interface Processo {
   selo: string;
   descricao: string;
   edital: string;
+  /** Edital complementar (ex.: reabertura/ajuste de vagas) — opcional, exibido
+   * com destaque logo abaixo do edital principal, sem substituí-lo. */
+  editalComplementar?: string;
   codColigada: number;
   codFilial: number;
   ps: number; // ← ID do Processo Seletivo de 2027 (CONFIRMAR no RM)
@@ -52,6 +55,7 @@ export const PROCESSOS: Record<ChaveProcesso, Processo> = {
       "Para as demais séries com vagas disponíveis, dos Anos Iniciais ao Ensino Médio. " +
       "Formação acadêmica de excelência aliada a valores cristãos.",
     edital: "/editais/edital-2027-F2-M2.pdf",
+    editalComplementar: "/editais/edital-complementar-2027-F2-M2.pdf",
     codColigada: 1,
     codFilial: 1,
     // IDPS 212 — "F2-M2-2027" (2º Ano do Fundamental → 2ª Série do Ensino Médio;

@@ -46,6 +46,20 @@ export function SeletorProcessos() {
                   Inscrever →
                 </a>
               </div>
+
+              {p.editalComplementar && (
+                <a
+                  href={p.editalComplementar}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-3 inline-flex w-fit items-center gap-2 rounded-full border-2 border-csa-vermelho bg-csa-vermelho/5 px-5 py-2.5 text-sm font-bold text-csa-vermelho transition hover:bg-csa-vermelho/10"
+                >
+                  <span className="rounded-full bg-csa-vermelho px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wide text-white">
+                    Novo
+                  </span>
+                  Baixar edital complementar
+                </a>
+              )}
             </article>
           ))}
         </div>

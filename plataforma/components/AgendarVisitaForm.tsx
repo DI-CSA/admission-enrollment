@@ -239,17 +239,6 @@ export default function AgendarVisitaForm() {
         Escolha um horário disponível e conheça o Colégio Santo Agostinho — Leblon.
       </p>
 
-      <div className="mt-4 rounded-lg border-2 border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-        <p className="font-bold">
-          Atenção: inscrições abertas somente para o 1º Ano do Ensino Fundamental
-        </p>
-        <p className="mt-1">
-          Para candidatos do 2º ano em diante não há, neste momento, processo de
-          inscrição aberto. A visita continua disponível a todos os interessados,
-          mas agendá-la não garante possibilidade de inscrição fora do 1º ano.
-        </p>
-      </div>
-
       {carregando ? (
         <p className="mt-6 text-cinza-suave">Carregando horários…</p>
       ) : slots.length === 0 ? (
@@ -348,9 +337,6 @@ export default function AgendarVisitaForm() {
             </span>
             <p className="text-xs text-cinza-suave">
               Identifique cada pessoa (pai, mãe, responsável ou candidato).
-            </p>
-            <p className="text-xs font-medium text-amber-800">
-              Lembrete: só há inscrição aberta para o 1º Ano do Ensino Fundamental.
             </p>
             {participantes.map((p, i) => (
               <div key={i} className="flex flex-wrap items-center gap-2">
