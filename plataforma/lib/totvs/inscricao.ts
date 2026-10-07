@@ -102,6 +102,11 @@ export interface SpsInscAreaOfertaCompl {
   // MATRICULA(10): número de matrícula do irmão já matriculado (GRUPO="GRP1A").
   // Null nos demais grupos. Confirmado em produção (PS anteriores gravam aqui).
   MATRICULA?: string | null;
+  // HORAPROVA: horário da prova escolhido pelo responsável ("10H"/"14H").
+  // Campo complementar configurado no RM em 06/10/2026 (SPSCAMPOCOMPLFILIALGRUPO),
+  // OBRIGATORIO='T' para os PS 211-220 (2º Ano do Fundamental à 2ª Série do EM —
+  // o grupo do edital complementar); o PS 210 (1º Ano) não tem esse campo.
+  HORAPROVA?: "10H" | "14H";
 }
 
 /** Sim/Não complementar: "1"=Sim, "2"=Não. */
@@ -258,6 +263,12 @@ export interface DadosComplementares {
   irmaoMatriculadoNome?: string | null;
   /** Matrícula do irmão já matriculado (só quando grupo="GRP1A"); grava em MATRICULA. */
   irmaoMatricula?: string | null;
+  /**
+   * Horário da prova ("10H"/"14H") — obrigatório para PS 211-220 (2º Ano do
+   * Fundamental em diante); o PS 210 (1º Ano) não tem esse campo complementar.
+   * `null`/ausente quando a série não exige (validado em app/api/inscricao/route.ts).
+   */
+  horaProva?: "10H" | "14H" | null;
 }
 
 /**
@@ -468,6 +479,7 @@ export function montarModeloNovaInscricao(
     NECESSIDADEESPECIAL: complementares.necessidadeEspecial,
     NOME: nomeIrmaoMatriculado ?? nomeIrmaoGemelar,
     MATRICULA: matriculaIrmao,
+    ...(complementares.horaProva ? { HORAPROVA: complementares.horaProva } : {}),
   };
 
   const usuarioCandidato: SpsUsuario = {

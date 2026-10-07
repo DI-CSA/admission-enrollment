@@ -305,6 +305,12 @@ export function WizardInscricao({
   const [areas, setAreas] = useState<AreaItem[]>([]);
   const [carregandoAreas, setCarregandoAreas] = useState(false);
   const [serieSel, setSerieSel] = useState<AreaItem | null>(null);
+  // Horário da prova (campo complementar HORAPROVA do RM) — obrigatório para
+  // todas as séries exceto o 1º Ano do Fundamental (IDPS 210). Só sabemos o
+  // IDPS depois que a série é escolhida, por isso fica aqui, não na etapa
+  // "complemento" (que vem antes de "area" no wizard).
+  const [horaProva, setHoraProva] = useState<"" | "10H" | "14H">("");
+  const precisaHoraProva = serieSel != null && serieSel.idps !== 210;
 
   // Documentos exigidos na inscrição (por PS + série escolhida). Carregados ao
   // entrar na etapa; os arquivos anexados ficam em `docsArquivos` (base64).
@@ -575,6 +581,7 @@ export function WizardInscricao({
         irmaoCpf: irmaoGemeo === "1" ? irmaoCpf : null,
         irmaoMatriculadoNome: grupo === "GRP1A" ? irmaoMatNome.trim() : null,
         irmaoMatricula: grupo === "GRP1A" ? irmaoMatricula.trim() : null,
+        horaProva: precisaHoraProva ? horaProva || null : null,
       };
       const res = await fetch("/api/inscricao", {
         method: "POST",
@@ -1213,10 +1220,30 @@ export function WizardInscricao({
           })}
         </div>
 
+        {precisaHoraProva && (
+          <label className="block">
+            <span className="block text-sm font-semibold text-grafite">
+              Horário da prova *
+            </span>
+            <select
+              required
+              value={horaProva}
+              onChange={(e) => setHoraProva(e.target.value as "10H" | "14H")}
+              className="mt-1 w-full rounded-lg border border-black/15 p-2.5 text-sm"
+            >
+              <option value="" disabled>
+                Selecione…
+              </option>
+              <option value="10H">Manhã (10h)</option>
+              <option value="14H">Tarde (14h)</option>
+            </select>
+          </label>
+        )}
+
         {erro && <p className="text-sm text-csa-vermelho">{erro}</p>}
         <button
           type="button"
-          disabled={!serieSel}
+          disabled={!serieSel || (precisaHoraProva && !horaProva)}
           onClick={() => {
             setErro(null);
             // Evento de funil (RD): série/área escolhida. Best-effort e
@@ -1604,6 +1631,18 @@ export function WizardInscricao({
             <dt className="text-cinza-suave">Série pretendida</dt>
             <dd className="text-grafite">{area?.nome ?? "—"}</dd>
           </div>
+          {precisaHoraProva && (
+            <div className="flex justify-between">
+              <dt className="text-cinza-suave">Horário da prova</dt>
+              <dd className="text-grafite">
+                {horaProva === "10H"
+                  ? "Manhã (10h)"
+                  : horaProva === "14H"
+                    ? "Tarde (14h)"
+                    : "—"}
+              </dd>
+            </div>
+          )}
           <div className="flex justify-between">
             <dt className="text-cinza-suave">Responsável</dt>
             <dd className="text-grafite">{responsavelNome}</dd>

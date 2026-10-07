@@ -209,11 +209,20 @@ interface Body {
 
 const SN1 = new Set(["1", "2"]);
 
+// PS sem o campo complementar HORAPROVA (ver SPSCAMPOCOMPLFILIALGRUPO) — só o
+// 1º Ano do Fundamental. Todos os demais (211-220: 2º Ano do Fund. à 2ª Série
+// do EM, o grupo do edital complementar) exigem HORAPROVA="10H"|"14H".
+const IDPS_SEM_HORAPROVA = new Set([210]);
+
 /** Valida os campos complementares obrigatórios do PS. */
 function complementaresValidos(
   c: Partial<DadosComplementares> | undefined,
+  idps: number,
 ): c is DadosComplementares {
   if (!c) return false;
+  if (!IDPS_SEM_HORAPROVA.has(idps) && c.horaProva !== "10H" && c.horaProva !== "14H") {
+    return false;
+  }
   // Irmão gemelar (IG="1"): exige nome e um CPF válido do irmão.
   if (String(c.irmaoGemeo) === "1") {
     if (
@@ -478,7 +487,7 @@ export async function POST(req: NextRequest) {
     !cpfValido(candidato.cpf) ||
     !candidato.nacionalidade ||
     !enderecoCandidatoValido(candidato) ||
-    !complementaresValidos(complementares) ||
+    !complementaresValidos(complementares, Number(body.idps)) ||
     !opcao?.areaInteresseId
   ) {
     return NextResponse.json(
